@@ -1,0 +1,32 @@
+{
+  "name": "operational-ontology",
+  "version": "0.1.0",
+  "private": true,
+  "description": "A minimal, readable reference implementation of the Operational Ontology pattern. Palantir Foundry is one implementation; this is the concept, minimized.",
+  "type": "module",
+  "scripts": {
+    "demo": "tsx examples/orders/demo.ts",
+    "mcp": "tsx examples/orders/mcp-server.ts",
+    "test": "tsx --test tests/*.test.ts",
+    "typecheck": "tsc --noEmit"
+  },
+  "keywords": [
+    "ontology",
+    "operational-ontology",
+    "domain-model",
+    "mcp",
+    "ai-agents"
+  ],
+  "license": "MIT",
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.29.0",
+    "better-sqlite3": "^12.11.1",
+    "zod": "^4.4.3"
+  },
+  "devDependencies": {
+    "@types/better-sqlite3": "^7.6.13",
+    "@types/node": "^26.1.1",
+    "tsx": "^4.23.0",
+    "typescript": "^7.0.2"
+  }
+}
