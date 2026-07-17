@@ -253,26 +253,24 @@ export class Runtime {
    * It is an infrastructure entry point, not a user write path — user writes
    * go through `execute`.
    *
-   * Caveat (v0 simplification): re-loading replaces base rows and thereby
-   * overwrites prior action edits. Foundry keeps edits in their own layer and
-   * reapplies them over the re-indexed base — see "Failure semantics" in the
-   * README.
+   * Snapshot semantics, per loaded type: replace, don't merge. Re-loading a
+   * type drops its previous rows — prior action edits to them included (a v0
+   * simplification; Foundry keeps edits in their own layer and reapplies them
+   * over the re-indexed base — see "Failure semantics" in the README). The
+   * loaded snapshot must satisfy the model's constraints, the same as edits.
    */
   load(snapshot: {
     objects?: Record<string, Record<string, unknown>[]>
     links?: Record<string, Array<[from: string, to: string]>>
   }): void {
-    const insertObject = this.#db.prepare(
-      'INSERT OR REPLACE INTO objects (type, pk, data) VALUES (?, ?, ?)',
-    )
-    const insertLink = this.#db.prepare(
-      'INSERT OR REPLACE INTO links (name, from_pk, to_pk) VALUES (?, ?, ?)',
-    )
+    const insertObject = this.#db.prepare('INSERT INTO objects (type, pk, data) VALUES (?, ?, ?)')
+    const insertLink = this.#db.prepare('INSERT OR REPLACE INTO links (name, from_pk, to_pk) VALUES (?, ?, ?)')
     this.#db.transaction(() => {
       for (const [type, rows] of Object.entries(snapshot.objects ?? {})) {
         const def = this.ontology.objects[type]
         const schema = this.#schemas.get(type)
         if (!def || !schema) throw new Error(`unknown object type "${type}"`)
+        this.#db.prepare('DELETE FROM objects WHERE type = ?').run(type)
         for (const row of rows) {
           const parsed = schema.safeParse(row)
           if (!parsed.success) {
@@ -283,8 +281,10 @@ export class Runtime {
       }
       for (const [name, pairs] of Object.entries(snapshot.links ?? {})) {
         if (!(name in this.ontology.links)) throw new Error(`unknown link type "${name}"`)
+        this.#db.prepare('DELETE FROM links WHERE name = ?').run(name)
         for (const [from, to] of pairs) insertLink.run(name, from, to)
       }
+      this.#validateLinks()
     })()
   }
 
@@ -311,7 +311,7 @@ export class Runtime {
       .filter(matcher(opts.filter))
   }
 
-  /** Follow a link from one object to its neighbours. Both directions are indexed. */
+  /** Follow a link from one object to its neighbours. Both directions are traversable. */
   traverse<O = Record<string, unknown>>(
     linkName: string,
     pk: string,
@@ -319,10 +319,13 @@ export class Runtime {
   ): O[] {
     const link = this.ontology.links[linkName]
     if (!link) throw new Error(`unknown link type "${linkName}"`)
-    const [where, select, targetType] =
+    const [where, select, targetType, originType] =
       (opts.direction ?? 'forward') === 'forward'
-        ? ['from_pk', 'to_pk', link.to]
-        : ['to_pk', 'from_pk', link.from]
+        ? ['from_pk', 'to_pk', link.to, link.from]
+        : ['to_pk', 'from_pk', link.from, link.to]
+    // A hidden origin leaks nothing: traversal from an object the actor
+    // cannot see behaves exactly like traversal from a missing one.
+    if (!this.get(originType, pk, { actor: opts.actor })) return []
     const rows = this.#db
       .prepare(`SELECT ${select} AS pk FROM links WHERE name = ? AND ${where} = ? ORDER BY pk`)
       .all(linkName, pk) as { pk: string }[]
@@ -512,6 +515,9 @@ export class Runtime {
       const def = this.#objectDef(edit.object)
       const schema = this.#schemas.get(edit.object)!
       if (edit.op === 'modify') {
+        if (def.primaryKey in edit.changes && edit.changes[def.primaryKey] !== edit.pk) {
+          throw new Error(`cannot modify the primary key of ${edit.object}/${edit.pk}`)
+        }
         const current = this.#fetch(edit.object, edit.pk)
         if (!current) throw new Error(`cannot modify missing object ${edit.object}/${edit.pk}`)
         const next = schema.parse({ ...current, ...edit.changes })
@@ -524,7 +530,49 @@ export class Runtime {
           .prepare('INSERT INTO objects (type, pk, data) VALUES (?, ?, ?)')
           .run(edit.object, String(data[def.primaryKey]), JSON.stringify(data))
       } else {
+        // RESTRICT: an object with links still attached refuses to die — unlink first.
+        for (const [name, link] of Object.entries(this.ontology.links)) {
+          const columns = [
+            ...(link.from === edit.object ? ['from_pk'] : []),
+            ...(link.to === edit.object ? ['to_pk'] : []),
+          ]
+          for (const column of columns) {
+            const { n } = this.#db
+              .prepare(`SELECT COUNT(*) AS n FROM links WHERE name = ? AND ${column} = ?`)
+              .get(name, edit.pk) as { n: number }
+            if (n > 0) {
+              throw new Error(
+                `cannot delete ${edit.object}/${edit.pk}: ${n} "${name}" link(s) attached — unlink first`,
+              )
+            }
+          }
+        }
         this.#db.prepare('DELETE FROM objects WHERE type = ? AND pk = ?').run(edit.object, edit.pk)
+      }
+    }
+  }
+
+  /** The indexed snapshot must satisfy the model's constraints, same as edits do. */
+  #validateLinks(): void {
+    for (const [name, link] of Object.entries(this.ontology.links)) {
+      const rows = this.#db
+        .prepare('SELECT from_pk, to_pk FROM links WHERE name = ?')
+        .all(name) as Array<{ from_pk: string; to_pk: string }>
+      const parentOf = new Map<string, string>()
+      for (const { from_pk, to_pk } of rows) {
+        if (!this.#fetch(link.from, from_pk))
+          throw new Error(`link "${name}": ${link.from}/${from_pk} does not exist`)
+        if (!this.#fetch(link.to, to_pk))
+          throw new Error(`link "${name}": ${link.to}/${to_pk} does not exist`)
+        if (link.kind === 'one-to-many') {
+          const previous = parentOf.get(to_pk)
+          if (previous !== undefined && previous !== from_pk) {
+            throw new Error(
+              `link "${name}": ${link.to}/${to_pk} is linked to more than one ${link.from} (one-to-many)`,
+            )
+          }
+          parentOf.set(to_pk, from_pk)
+        }
       }
     }
   }

@@ -37,7 +37,7 @@ export const orders = defineOntology({
         id: z.string(),
         customerId: z.string(),
         status: z.enum(['pending', 'assigned', 'shipped', 'cancelled']),
-        total: z.number(),
+        total: z.number().int(), // minor units — money is not a float
         assignee: z.string().nullable(),
         // Which system of record this order lives in — write-back routes on this.
         sourceSystem: z.enum(['north', 'south']),

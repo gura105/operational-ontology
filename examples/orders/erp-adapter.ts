@@ -26,16 +26,22 @@ export function createErpAdapter(
         const order = lookupOrder(edit.pk)
         if (!order) throw new Error(`order ${edit.pk} not found in the ontology store`)
 
+        // The system of record re-verifies its own invariant on cancellation:
+        // a guarded UPDATE lets the ERP refuse a stale cancel even when the
+        // ontology's view of the order was out of date (see "Preconditions
+        // and freshness" in the README).
         if (order.sourceSystem === 'north') {
           const res = dbs.north
-            .prepare('UPDATE tbl_order SET stat = ? WHERE order_no = ?')
+            .prepare(`UPDATE tbl_order SET stat = ? WHERE order_no = ?${status === 'cancelled' ? ' AND stat != 1' : ''}`)
             .run(NORTH_CODE[status], order.sourceId)
-          if (res.changes !== 1) throw new Error(`north system rejected update of ${order.sourceId}`)
+          if (res.changes !== 1) throw new Error(`north system refused update of ${order.sourceId}`)
         } else {
           const res = dbs.south
-            .prepare('UPDATE SALES_ORDER SET ORDER_STATUS = ? WHERE ORDER_ID = ?')
+            .prepare(
+              `UPDATE SALES_ORDER SET ORDER_STATUS = ? WHERE ORDER_ID = ?${status === 'cancelled' ? " AND ORDER_STATUS != 'SHIPPED'" : ''}`,
+            )
             .run(status.toUpperCase(), order.sourceId)
-          if (res.changes !== 1) throw new Error(`south system rejected update of ${order.sourceId}`)
+          if (res.changes !== 1) throw new Error(`south system refused update of ${order.sourceId}`)
         }
       }
     },

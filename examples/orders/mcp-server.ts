@@ -6,6 +6,9 @@
  *
  * Then ask the agent to "cancel every order of Yamada Trading" and watch the
  * shipped one get refused with a machine-readable error the agent can explain.
+ *
+ * Over stdio all callers collapse to a single identity; set OO_AGENT to name
+ * the agent this server instance serves (actor becomes `agent:<name>`).
  */
 import Database from 'better-sqlite3'
 import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js'
@@ -22,5 +25,5 @@ const adapter = createErpAdapter(legacy, (pk) => rt.get('Order', pk, { actor: 's
 rt = createRuntime(orders, new Database(':memory:'), { writeback: adapter })
 rt.load(integrate(legacy))
 
-await buildMcpServer(rt).connect(new StdioServerTransport())
+await buildMcpServer(rt, { agent: process.env.OO_AGENT }).connect(new StdioServerTransport())
 console.error('operational-ontology: orders ontology served over stdio')

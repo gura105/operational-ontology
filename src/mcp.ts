@@ -18,8 +18,11 @@ import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js'
 import { z } from 'zod'
 import type { Runtime } from './core.js'
 
-export function buildMcpServer(rt: Runtime): McpServer {
+export function buildMcpServer(rt: Runtime, opts: { agent?: string } = {}): McpServer {
   const server = new McpServer({ name: `operational-ontology:${rt.ontology.name}`, version: '0.1.0' })
+  // Over stdio there is no session id, so every caller collapses to one
+  // identity — pass opts.agent to name the agent this server serves.
+  const actorOf = (extra?: { sessionId?: string }) => `agent:${extra?.sessionId ?? opts.agent ?? 'mcp'}`
   const asJson = (value: unknown) => ({
     content: [{ type: 'text' as const, text: JSON.stringify(value, null, 2) }],
   })
@@ -48,6 +51,31 @@ export function buildMcpServer(rt: Runtime): McpServer {
       },
       async (args: Record<string, unknown>, extra: { sessionId?: string }) =>
         asJson(rt.get(typeName, String(args[def.primaryKey]), { actor: actorOf(extra) }) ?? null),
+    )
+    server.registerTool(
+      `aggregate_${snake(typeName)}`,
+      {
+        description:
+          `Group ${typeName} objects by a property, counting each group and optionally summing ` +
+          'a numeric property. Query-time aggregation — nothing is precomputed.',
+        inputSchema: {
+          group_by: z.string(),
+          sum: z.string().optional(),
+          filter: z.record(z.string(), z.any()).optional(),
+        },
+      },
+      async (
+        args: { group_by: string; sum?: string; filter?: Record<string, unknown> },
+        extra: { sessionId?: string },
+      ) =>
+        asJson(
+          rt.aggregate(typeName, {
+            actor: actorOf(extra),
+            filter: args.filter ? prune(args.filter) : undefined,
+            groupBy: (o: Record<string, unknown>) => String(o[args.group_by]),
+            ...(args.sum ? { sum: (o: Record<string, unknown>) => Number(o[args.sum!] ?? 0) } : {}),
+          }),
+        ),
     )
   }
 
@@ -92,7 +120,9 @@ export function buildMcpServer(rt: Runtime): McpServer {
   server.registerTool(
     'read_audit_log',
     {
-      description: 'Read the append-only audit log: every applied and rejected action, with actor and params.',
+      description:
+        'Read the append-only audit log: every applied and rejected action, with actor and params. ' +
+        'This is an unscoped administrative view — entries are not filtered by visibility (fail-open, declared).',
       inputSchema: {
         action: z.string().optional(),
         status: z.enum(['applied', 'rejected']).optional(),
@@ -106,8 +136,6 @@ export function buildMcpServer(rt: Runtime): McpServer {
 }
 
 const snake = (name: string) => name.replace(/([a-z0-9])([A-Z])/g, '$1_$2').toLowerCase()
-
-const actorOf = (extra?: { sessionId?: string }) => `agent:${extra?.sessionId ?? 'mcp'}`
 
 const prune = <T extends Record<string, unknown>>(obj: T): T =>
   Object.fromEntries(Object.entries(obj).filter(([, v]) => v !== undefined)) as T

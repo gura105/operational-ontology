@@ -16,6 +16,7 @@ import {
   link,
   modify,
   reject,
+  remove,
   unlink,
   type WritebackAdapter,
 } from '../src/core.js'
@@ -90,8 +91,48 @@ const ontology = defineOntology({
       preconditions: [],
       effects: ({ object }) => [modify('Order', object.id as string, { status: 'bogus' })],
     }),
+    purgeOrder: defineAction({
+      // Deletes without unlinking — the RESTRICT rule must catch it.
+      object: 'Order',
+      targetParam: 'orderId',
+      params: { orderId: z.string() },
+      preconditions: [],
+      effects: ({ object }) => [remove('Order', object.id as string)],
+    }),
+    scrapOrder: defineAction({
+      object: 'Order',
+      targetParam: 'orderId',
+      params: { orderId: z.string() },
+      preconditions: [],
+      effects: ({ object }) => [
+        unlink('customerOrders', object.customerId as string, object.id as string),
+        remove('Order', object.id as string),
+      ],
+    }),
+    mangleId: defineAction({
+      // Tries to rewrite the primary key — the runtime must refuse.
+      object: 'Order',
+      targetParam: 'orderId',
+      params: { orderId: z.string() },
+      preconditions: [],
+      effects: ({ object }) => [modify('Order', object.id as string, { id: 'HIJACKED' })],
+    }),
   },
 })
+
+const SNAPSHOT = {
+  objects: {
+    Customer: [
+      { id: 'C1', name: 'Yamada' },
+      { id: 'C2', name: 'Sato' },
+    ],
+    Order: [
+      { id: 'O1', customerId: 'C1', status: 'shipped', total: 100 },
+      { id: 'O2', customerId: 'C1', status: 'pending', total: 200 },
+    ],
+  },
+  links: { customerOrders: [['C1', 'O1'], ['C1', 'O2']] as Array<[string, string]> },
+}
 
 function setup(adapter?: WritebackAdapter) {
   const rt = createRuntime(
@@ -99,19 +140,7 @@ function setup(adapter?: WritebackAdapter) {
     new Database(':memory:'),
     adapter ? { writeback: adapter } : { writeback: noopAdapter() },
   )
-  rt.load({
-    objects: {
-      Customer: [
-        { id: 'C1', name: 'Yamada' },
-        { id: 'C2', name: 'Sato' },
-      ],
-      Order: [
-        { id: 'O1', customerId: 'C1', status: 'shipped', total: 100 },
-        { id: 'O2', customerId: 'C1', status: 'pending', total: 200 },
-      ],
-    },
-    links: { customerOrders: [['C1', 'O1'], ['C1', 'O2']] },
-  })
+  rt.load(SNAPSHOT)
   return rt
 }
 
@@ -244,6 +273,49 @@ test('links traverse in both directions', () => {
   )
 })
 
+test('delete is RESTRICT: a linked object refuses to die — unlink first', () => {
+  const rt = setup()
+  assert.throws(() => rt.execute('purgeOrder', { orderId: 'O2' }, { actor: 'test' }), /unlink first/)
+  assert.notEqual(rt.get('Order', 'O2', asTest), undefined)
+  assert.equal(rt.execute('scrapOrder', { orderId: 'O2' }, { actor: 'test' }).ok, true)
+  assert.equal(rt.get('Order', 'O2', asTest), undefined)
+})
+
+test('the primary key cannot be modified', () => {
+  const rt = setup()
+  assert.throws(() => rt.execute('mangleId', { orderId: 'O2' }, { actor: 'test' }), /primary key/)
+  assert.notEqual(rt.get('Order', 'O2', asTest), undefined)
+})
+
+test('re-loading is snapshot replacement — links reset instead of merging', () => {
+  const rt = setup()
+  rt.execute('reassignOrder', { orderId: 'O2', toCustomerId: 'C2' }, { actor: 'test' })
+  rt.load(SNAPSHOT)
+  // The edited link is gone; the snapshot's view is back, with a single parent.
+  assert.deepEqual(
+    rt.traverse<{ id: string }>('customerOrders', 'O2', { ...asTest, direction: 'reverse' }).map((c) => c.id),
+    ['C1'],
+  )
+})
+
+test('the indexed snapshot must satisfy the model constraints too', () => {
+  const rt = createRuntime(ontology, new Database(':memory:'))
+  assert.throws(
+    () =>
+      rt.load({
+        objects: {
+          Customer: [
+            { id: 'C1', name: 'A' },
+            { id: 'C2', name: 'B' },
+          ],
+          Order: [{ id: 'O1', customerId: 'C1', status: 'pending', total: 1 }],
+        },
+        links: { customerOrders: [['C1', 'O1'], ['C2', 'O1']] },
+      }),
+    /one-to-many/,
+  )
+})
+
 test('aggregation happens at query time', () => {
   const rt = setup()
   const byStatus = rt.aggregate<{ status: string; total: number }>('Order', {
@@ -271,8 +343,14 @@ const visOntology = defineOntology({
       properties: { id: z.string(), owner: z.string(), title: z.string() },
       visibility: ({ object, actor }) => actor === object.owner || actor === 'user:auditor',
     }),
+    Comment: defineObject({
+      primaryKey: 'id',
+      properties: { id: z.string(), docId: z.string(), text: z.string() },
+    }),
   },
-  links: {},
+  links: {
+    docComments: defineLink({ from: 'Doc', to: 'Comment', kind: 'one-to-many' }),
+  },
   actions: {
     renameDoc: defineAction({
       object: 'Doc',
@@ -292,7 +370,9 @@ function visSetup() {
         { id: 'D1', owner: 'user:alice', title: 'alpha' },
         { id: 'D2', owner: 'user:bob', title: 'beta' },
       ],
+      Comment: [{ id: 'CM1', docId: 'D2', text: 'looks good' }],
     },
+    links: { docComments: [['D2', 'CM1']] },
   })
   return rt
 }
@@ -301,6 +381,12 @@ test('visibility lives in the model: the same search returns different worlds', 
   const rt = visSetup()
   assert.deepEqual(rt.search<{ id: string }>('Doc', { actor: 'user:alice' }).map((d) => d.id), ['D1'])
   assert.deepEqual(rt.search<{ id: string }>('Doc', { actor: 'user:auditor' }).map((d) => d.id), ['D1', 'D2'])
+})
+
+test('a hidden origin leaks nothing through traversal', () => {
+  const rt = visSetup()
+  assert.deepEqual(rt.traverse('docComments', 'D2', { actor: 'user:alice' }), [])
+  assert.equal(rt.traverse('docComments', 'D2', { actor: 'user:bob' }).length, 1)
 })
 
 test('a hidden object is indistinguishable from a nonexistent one — even as an action target', () => {

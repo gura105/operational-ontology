@@ -32,6 +32,9 @@ test('the tool surface is generated from the model — and contains no raw data 
   const { client } = await connectedClient()
   const tools = (await client.listTools()).tools.map((t) => t.name).sort()
   assert.deepEqual(tools, [
+    'aggregate_customer',
+    'aggregate_order',
+    'aggregate_product',
     'assign_order',
     'cancel_order',
     'get_customer',
@@ -61,6 +64,18 @@ test('an agent can read the model through search and traversal', async () => {
   })
   const ordersOfYamada = JSON.parse((traverse.content as any)[0].text)
   assert.deepEqual(ordersOfYamada.map((o: any) => o.id).sort(), ['N-A-1001', 'N-A-1002'])
+})
+
+test('an agent can aggregate through the model', async () => {
+  const { client } = await connectedClient()
+  const result = await client.callTool({
+    name: 'aggregate_order',
+    arguments: { group_by: 'status', sum: 'total' },
+  })
+  const groups = JSON.parse((result.content as any)[0].text)
+  assert.equal(groups.pending.count, 4)
+  assert.equal(groups.pending.sum, 32000)
+  assert.equal(groups.shipped.count, 2)
 })
 
 test('the same business rule that gates humans gates the agent', async () => {
