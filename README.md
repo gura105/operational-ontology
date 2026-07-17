@@ -2,7 +2,7 @@
 
 # Operational Ontology
 
-> **An operational ontology is a shared domain model built on top of the data of systems you don't own — objects, links, and actions — where reads traverse the model and writes are gated by actions that carry business rules, are audited, and propagate back to the systems of record.**
+> **An operational ontology is a shared domain model built on top of the data of systems you don't own — objects, links, and actions — where reads traverse the model and writes are gated by actions that carry business rules, are audited, and propagate back to the systems of record that own the state they change.**
 >
 > A semantic layer lets you *read* your business. An operational ontology lets you *run* it.
 
@@ -24,14 +24,28 @@ Every row is a legitimate tool, and this table is not a ranking. But the one pro
 
 ## The four properties
 
-A system implements the pattern when all four hold:
+A system implements the pattern when all four hold. They say *what* must be true, never *how* — outbox or webhook, SQL or search index, one store or many: mechanisms are implementation choices. This is a shared vocabulary for arguing about systems, not a certification to pass.
 
-1. **Semantic objects and links.** Business entities and their relationships are modeled explicitly, on top of physical data that existed first.
-2. **Action-gated writes.** State changes only through named actions. There is no generic update path.
-3. **Business rules at the action.** Preconditions are domain invariants ("a shipped order cannot be cancelled"), refused with machine-readable errors — not access control, and not UI validation.
-4. **Write-back to systems of record.** Changes propagate to the source systems as governed, ordered side effects. Truth stays where it always was.
+1. **Semantic objects and links.** Business entities and their relationships are modeled explicitly, on top of physical data that existed first — data other systems own.
 
-The litmus question: **"Can you cancel an order from your semantic layer?"** If the answer is no, you have a read layer — useful, but a different thing.
+2. **Action-gated writes.** State in this layer moves for three reasons: the sources changed and re-indexing reflects it; the model evolved under review; the business decided something. This property governs the third — a business decision changes state only through a named action, with no generic update path around the actions for a user, an application, or an agent. Re-indexing is not a loophole; it is the sources speaking. Schema evolution is not one either; it changes what can be said. Neither may be used to smuggle a decision past the actions: a write that picks a business outcome is a decision, whatever the endpoint is named.
+
+3. **Business rules at the action.** Preconditions are domain invariants ("a shipped order cannot be cancelled"), refused with machine-readable errors — not access control, and not UI validation. Every attempt, applied or refused, lands in the audit log.
+
+4. **Write-back to systems of record.** Every write has a declared home, and the model says which. A **source-backed** change touches state an upstream system owns — an order's status, mastered in the ERP — and propagates back to that source as a governed, ordered side effect: truth stays where it always was. An **ontology-owned** change records what no source system has a column for — an assignee, a triage note — and for that state the ontology's own store *is* the system of record, declared rather than accidental. (**Derived** state — aggregates, counts — is computed and never written.) What the property forbids is the unlabeled middle: a shadow copy of another system's truth that never makes it home, a write whose home nobody can name. An implementation with no source-backed writes at all is not a smaller version of this pattern — it is an application with its own database, wearing the vocabulary.
+
+The litmus question: **"Can you cancel an order from your semantic layer?"** If the answer is no, you have a read layer — useful, but a different thing. If the answer is yes but no row in any system of record ever changes, you have a parallel database — also a different thing. And if it cancels already-shipped orders without complaint, you have a write API — the third property is the whole difference.
+
+### What an implementation declares
+
+The pattern is agnostic about mechanisms; it is not agnostic about silence. Four choices vary between implementations in ways users can observe, so an implementation states its four — this repository's answers are one worked example:
+
+- **Authority** — which changes are source-backed, which ontology-owned, which state is derived. *Here the model itself answers, per action: `writeback: true` on `cancelOrder` marks its change source-backed; its deliberate absence on `assignOrder` declares assignment ontology-owned. Foundry answers with per-action write-back webhooks, edit-only properties, and a declared conflict-resolution strategy.*
+- **Failure semantics** — what happens when write-back and the local commit disagree. *Here: write-back runs first; if the source refuses, nothing changes here — see [Failure semantics](#failure-semantics).*
+- **Re-indexing vs edits** — whether ontology-owned state survives a refresh of the base. *Here: it doesn't — a declared v0 simplification. Foundry keeps edits in their own layer and reapplies them over the fresh base.*
+- **Visibility default** — what an object with no policy falls back to. *Here: fail-open — see the [FAQ](#faq).*
+
+Answer these differently from this repository and you are still inside the pattern — the answers are the argument worth having. If a product calls itself an operational ontology, don't ask for a certificate; ask for its four answers.
 
 ## Quickstart
 
@@ -104,11 +118,11 @@ const ontology = defineOntology({
 })
 ```
 
-The definition is a plain value — enumerable, serializable, diffable. That is what makes the MCP surface derivable and the write path closed: `Runtime.execute()` is the only public method that mutates state, and it always runs *validate → preconditions → effects → write-back → atomic commit of edits + audit entry*.
+The definition is a plain value — enumerable, serializable, diffable. That is what makes the MCP surface derivable and the write path closed: `Runtime.execute()` is the only public method that mutates business state — `load()` re-indexes the sources: replay, not decision — and it always runs *validate → preconditions → effects → write-back → atomic commit of edits + audit entry*.
 
 Reads carry identity too: every `search` / `get` / `traverse` / `aggregate` runs as an `actor`, and an object type may attach a `visibility` predicate — row-level security in its minimal form, living in the model like everything else. A hidden object is indistinguishable from a nonexistent one, for reads and for action targets alike.
 
-Edits are data too: `modify`, `create`, `delete` — and `link` / `unlink`, so actions can rewire the instance graph, not just node properties. The link *types* are part of the model and don't change here; which links exist between which objects is state, and state only changes through actions — cardinality included: the runtime refuses a `link` that would give an order two customers. "Reassign this order to another customer" is an unlink, a link, and a modify, applied atomically under the same preconditions as everything else. (Changing the model itself — new object types, new link types — is schema evolution; see the FAQ.)
+Edits are data too: `modify`, `create`, `delete` — and `link` / `unlink`, so actions can rewire the instance graph, not just node properties. The link *types* are part of the model and don't change here; which links exist between which objects is state, and business state only changes through actions — cardinality included: the runtime refuses a `link` that would give an order two customers. "Reassign this order to another customer" is an unlink, a link, and a modify, applied atomically under the same preconditions as everything else. (Changing the model itself — new object types, new link types — is schema evolution; see the FAQ.)
 
 The model being data rather than classes is not an aesthetic choice. `class Order { cancel() {} }` cannot be enumerated into agent tools, shared across applications, or inspected at runtime — it is an application's private domain layer. The whole point here is that the domain layer stops being private.
 
@@ -134,7 +148,7 @@ Three layers. This repository implements the middle one only.
 
 **Downstream contract:** write-back is a governed **side effect**, not a distributed transaction (see below).
 
-One consequence is worth stating because it separates this pattern from query-side layers: **a layer that only answers queries can stay virtual; a layer that accepts writes must own state.** Edits exist here before — or instead of — the systems of record (`assignOrder` writes state no legacy system has a column for), so the ontology keeps its own store and its own audit log. What this repo does *not* own: the indexing machinery that makes reads fast at enterprise scale (incremental indexing, adjacency indexes, search backends). That is how Foundry serves billions of objects; it is an implementation of the layer, not part of the pattern.
+One consequence is worth stating because it separates this pattern from query-side layers: **a layer that only answers queries can stay virtual; a layer that accepts writes must own state.** Edits exist here before — or instead of — the systems of record (`assignOrder` writes state no legacy system has a column for — ontology-owned state, in the vocabulary of the fourth property), so the ontology keeps its own store and its own audit log. What this repo does *not* own: the indexing machinery that makes reads fast at enterprise scale (incremental indexing, adjacency indexes, search backends). That is how Foundry serves billions of objects; it is an implementation of the layer, not part of the pattern.
 
 ## Failure semantics
 

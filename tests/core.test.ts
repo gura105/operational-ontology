@@ -166,6 +166,16 @@ test('an unknown action is refused', () => {
   if (!result.ok) assert.equal(result.error.code, 'UNKNOWN_ACTION')
 })
 
+test('attempts that never reach the model are audited too', () => {
+  const rt = setup()
+  rt.execute('dropAllTables', {}, { actor: 'test' })
+  rt.execute('cancelOrder', { orderId: 'O2', reason: '' }, { actor: 'test' })
+  const rejected = rt.auditLog({ status: 'rejected' })
+  assert.deepEqual(rejected.map((e) => e.error?.code), ['UNKNOWN_ACTION', 'INVALID_PARAMS'])
+  assert.equal(rejected[0].target, '(unknown action)')
+  assert.equal(rejected[1].target, 'Order/O2')
+})
+
 test('write-back-first ordering: adapter failure blocks the ontology edit', () => {
   const calls: string[] = []
   const failing: WritebackAdapter = {
@@ -184,11 +194,13 @@ test('write-back-first ordering: adapter failure blocks the ontology edit', () =
   assert.equal(rt.auditLog({ status: 'applied' }).length, 0)
 })
 
-test('a failing commit rolls back completely (no partial edits, no orphan audit rows)', () => {
+test('a failing commit rolls back completely (no partial edits, no orphan applied rows)', () => {
   const rt = setup()
   assert.throws(() => rt.execute('corruptOrder', { orderId: 'O2' }, { actor: 'test' }))
   assert.equal(rt.get<{ status: string }>('Order', 'O2', asTest)!.status, 'pending')
   assert.equal(rt.auditLog({ status: 'applied' }).length, 0)
+  // The crashed attempt itself is still on the record.
+  assert.equal(rt.auditLog({ status: 'rejected' })[0]?.error?.code, 'COMMIT_FAILED')
 })
 
 test('actions can rewire the graph itself — links are edits too', () => {

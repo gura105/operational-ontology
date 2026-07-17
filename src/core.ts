@@ -354,26 +354,31 @@ export class Runtime {
    * write-back (if configured) → atomically commit edits + audit entry.
    */
   execute(actionName: string, params: Record<string, unknown>, opts: { actor: string }): ActionResult {
+    // Every attempt is audited — including the ones that never reach the model.
+    const refuseAs = (target: string, auditParams: Record<string, unknown>, error: Violation): ActionResult => {
+      this.#audit({ actor: opts.actor, action: actionName, target, params: auditParams, status: 'rejected', error })
+      return { ok: false, error }
+    }
+
     const action = this.ontology.actions[actionName]
     if (!action) {
-      return { ok: false, error: reject('UNKNOWN_ACTION', `no action named "${actionName}"`) }
+      return refuseAs('(unknown action)', params, reject('UNKNOWN_ACTION', `no action named "${actionName}"`))
     }
 
     const parsed = z.object(action.params).safeParse(params)
     if (!parsed.success) {
       const issue = parsed.error.issues[0]
-      return {
-        ok: false,
-        error: reject('INVALID_PARAMS', `${issue?.path.join('.') ?? 'params'}: ${issue?.message ?? 'invalid'}`),
-      }
+      const guessed = params[action.targetParam]
+      return refuseAs(
+        `${action.object}/${guessed != null ? String(guessed) : '(invalid)'}`,
+        params,
+        reject('INVALID_PARAMS', `${issue?.path.join('.') ?? 'params'}: ${issue?.message ?? 'invalid'}`),
+      )
     }
 
     const pk = String(parsed.data[action.targetParam])
     const target = `${action.object}/${pk}`
-    const refuse = (error: Violation): ActionResult => {
-      this.#audit({ actor: opts.actor, action: actionName, target, params: parsed.data, status: 'rejected', error })
-      return { ok: false, error }
-    }
+    const refuse = (error: Violation): ActionResult => refuseAs(target, parsed.data, error)
 
     // Visibility gates action targets too: an object the actor cannot see is
     // TARGET_NOT_FOUND — same error as a missing one, so existence never leaks.
@@ -402,10 +407,24 @@ export class Runtime {
     }
 
     // Edits and their audit entry commit together or not at all.
-    this.#db.transaction(() => {
-      this.#applyEdits(edits)
-      this.#audit({ actor: opts.actor, action: actionName, target, params: parsed.data, status: 'applied', edits })
-    })()
+    try {
+      this.#db.transaction(() => {
+        this.#applyEdits(edits)
+        this.#audit({ actor: opts.actor, action: actionName, target, params: parsed.data, status: 'applied', edits })
+      })()
+    } catch (e) {
+      // The transaction rolled back (its audit entry included) — record the
+      // crashed attempt outside it, then surface the error.
+      this.#audit({
+        actor: opts.actor,
+        action: actionName,
+        target,
+        params: parsed.data,
+        status: 'rejected',
+        error: reject('COMMIT_FAILED', e instanceof Error ? e.message : String(e)),
+      })
+      throw e
+    }
 
     return { ok: true, edits }
   }
