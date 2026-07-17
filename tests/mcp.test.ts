@@ -17,7 +17,7 @@ import { createErpAdapter } from '../examples/orders/erp-adapter.js'
 async function connectedClient() {
   const legacy = createFixtures()
   let rt: Runtime
-  const adapter = createErpAdapter(legacy, (pk) => rt.get('Order', pk))
+  const adapter = createErpAdapter(legacy, (pk) => rt.get('Order', pk, { actor: 'system:writeback' }))
   rt = createRuntime(orders, new Database(':memory:'), { writeback: adapter })
   rt.load(integrate(legacy))
 
@@ -72,7 +72,7 @@ test('the same business rule that gates humans gates the agent', async () => {
   assert.equal(result.isError, true)
   const payload = JSON.parse((result.content as any)[0].text)
   assert.equal(payload.error.code, 'SHIPPED_ORDER_CANNOT_BE_CANCELLED')
-  assert.equal(rt.get<{ status: string }>('Order', 'N-A-1001')!.status, 'shipped')
+  assert.equal(rt.get<{ status: string }>('Order', 'N-A-1001', { actor: 'user:hq' })!.status, 'shipped')
 })
 
 test('an allowed agent write lands, is audited, and reaches the system of record', async () => {
@@ -82,7 +82,7 @@ test('an allowed agent write lands, is audited, and reaches the system of record
     arguments: { orderId: 'S-SO-77', reason: 'duplicate' },
   })
   assert.notEqual(result.isError, true)
-  assert.equal(rt.get<{ status: string }>('Order', 'S-SO-77')!.status, 'cancelled')
+  assert.equal(rt.get<{ status: string }>('Order', 'S-SO-77', { actor: 'user:hq' })!.status, 'cancelled')
 
   const row = legacy.south
     .prepare("SELECT ORDER_STATUS FROM SALES_ORDER WHERE ORDER_ID = 'SO-77'")

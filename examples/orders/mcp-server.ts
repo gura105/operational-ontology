@@ -18,7 +18,7 @@ import { createErpAdapter } from './erp-adapter.js'
 
 const legacy = createFixtures()
 let rt: Runtime
-const adapter = createErpAdapter(legacy, (pk) => rt.get('Order', pk))
+const adapter = createErpAdapter(legacy, (pk) => rt.get('Order', pk, { actor: 'system:writeback' }))
 rt = createRuntime(orders, new Database(':memory:'), { writeback: adapter })
 rt.load(integrate(legacy))
 

@@ -33,10 +33,12 @@ export function buildMcpServer(rt: Runtime): McpServer {
       {
         description:
           `Search ${typeName} objects${def.description ? ` (${def.description})` : ''}. ` +
-          'All filter fields are optional and match by equality.',
+          'All filter fields are optional and match by equality. ' +
+          'Results are scoped by the model-attached visibility policy for this session.',
         inputSchema: filterShape,
       },
-      async (filter) => asJson(rt.search(typeName, prune(filter))),
+      async (filter: Record<string, unknown>, extra: { sessionId?: string }) =>
+        asJson(rt.search(typeName, { actor: actorOf(extra), filter: prune(filter) })),
     )
     server.registerTool(
       `get_${snake(typeName)}`,
@@ -44,7 +46,8 @@ export function buildMcpServer(rt: Runtime): McpServer {
         description: `Fetch a single ${typeName} by primary key (${def.primaryKey}).`,
         inputSchema: { [def.primaryKey]: z.string() },
       },
-      async (args) => asJson(rt.get(typeName, String(args[def.primaryKey])) ?? null),
+      async (args: Record<string, unknown>, extra: { sessionId?: string }) =>
+        asJson(rt.get(typeName, String(args[def.primaryKey]), { actor: actorOf(extra) }) ?? null),
     )
   }
 
@@ -61,7 +64,8 @@ export function buildMcpServer(rt: Runtime): McpServer {
           direction: z.enum(['forward', 'reverse']).default('forward'),
         },
       },
-      async (args) => asJson(rt.traverse(linkName, args.pk, args.direction)),
+      async (args: { pk: string; direction: 'forward' | 'reverse' }, extra: { sessionId?: string }) =>
+        asJson(rt.traverse(linkName, args.pk, { actor: actorOf(extra), direction: args.direction })),
     )
   }
 
@@ -76,8 +80,7 @@ export function buildMcpServer(rt: Runtime): McpServer {
         inputSchema: action.params,
       },
       async (params: Record<string, unknown>, extra: { sessionId?: string }) => {
-        const actor = `agent:${extra?.sessionId ?? 'mcp'}`
-        const result = rt.execute(actionName, params, { actor })
+        const result = rt.execute(actionName, params, { actor: actorOf(extra) })
         if (!result.ok) {
           return { ...asJson({ error: result.error }), isError: true }
         }
@@ -103,6 +106,8 @@ export function buildMcpServer(rt: Runtime): McpServer {
 }
 
 const snake = (name: string) => name.replace(/([a-z0-9])([A-Z])/g, '$1_$2').toLowerCase()
+
+const actorOf = (extra?: { sessionId?: string }) => `agent:${extra?.sessionId ?? 'mcp'}`
 
 const prune = <T extends Record<string, unknown>>(obj: T): T =>
   Object.fromEntries(Object.entries(obj).filter(([, v]) => v !== undefined)) as T

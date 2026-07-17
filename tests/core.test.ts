@@ -13,8 +13,10 @@ import {
   defineLink,
   defineObject,
   defineOntology,
+  link,
   modify,
   reject,
+  unlink,
   type WritebackAdapter,
 } from '../src/core.js'
 
@@ -52,6 +54,33 @@ const ontology = defineOntology({
       effects: ({ object }) => [modify('Order', object.id as string, { status: 'cancelled' })],
       writeback: true,
     }),
+    reassignOrder: defineAction({
+      // Rewires the graph itself: unlink + link + modify, atomically.
+      object: 'Order',
+      targetParam: 'orderId',
+      params: { orderId: z.string(), toCustomerId: z.string() },
+      preconditions: [
+        ({ object }) =>
+          object.status === 'shipped'
+            ? reject('SHIPPED_ORDER_CANNOT_BE_REASSIGNED', `order ${object.id} has already shipped`)
+            : undefined,
+      ],
+      effects: ({ object, params }) => [
+        unlink('customerOrders', object.customerId as string, object.id as string),
+        link('customerOrders', params.toCustomerId as string, object.id as string),
+        modify('Order', object.id as string, { customerId: params.toCustomerId }),
+      ],
+    }),
+    sloppyReassign: defineAction({
+      // Forgets the unlink — the runtime's cardinality check must catch it.
+      object: 'Order',
+      targetParam: 'orderId',
+      params: { orderId: z.string(), toCustomerId: z.string() },
+      preconditions: [],
+      effects: ({ object, params }) => [
+        link('customerOrders', params.toCustomerId as string, object.id as string),
+      ],
+    }),
     corruptOrder: defineAction({
       // Deliberately produces an edit that violates the Order schema —
       // used to prove that a failing commit leaves no partial state behind.
@@ -72,7 +101,10 @@ function setup(adapter?: WritebackAdapter) {
   )
   rt.load({
     objects: {
-      Customer: [{ id: 'C1', name: 'Yamada' }],
+      Customer: [
+        { id: 'C1', name: 'Yamada' },
+        { id: 'C2', name: 'Sato' },
+      ],
       Order: [
         { id: 'O1', customerId: 'C1', status: 'shipped', total: 100 },
         { id: 'O2', customerId: 'C1', status: 'pending', total: 200 },
@@ -83,6 +115,8 @@ function setup(adapter?: WritebackAdapter) {
   return rt
 }
 
+const asTest = { actor: 'test' }
+
 const noopAdapter = (): WritebackAdapter => ({ name: 'noop', apply: () => {} })
 
 test('a business rule refuses the write with a machine-readable error', () => {
@@ -90,7 +124,7 @@ test('a business rule refuses the write with a machine-readable error', () => {
   const result = rt.execute('cancelOrder', { orderId: 'O1', reason: 'changed mind' }, { actor: 'test' })
   assert.equal(result.ok, false)
   if (!result.ok) assert.equal(result.error.code, 'SHIPPED_ORDER_CANNOT_BE_CANCELLED')
-  assert.equal(rt.get<{ status: string }>('Order', 'O1')!.status, 'shipped') // unchanged
+  assert.equal(rt.get<{ status: string }>('Order', 'O1', asTest)!.status, 'shipped') // unchanged
 })
 
 test('rejected attempts are recorded in the audit log', () => {
@@ -105,7 +139,7 @@ test('an allowed action applies its edits and audits them atomically', () => {
   const rt = setup()
   const result = rt.execute('cancelOrder', { orderId: 'O2', reason: 'duplicate' }, { actor: 'test' })
   assert.equal(result.ok, true)
-  assert.equal(rt.get<{ status: string }>('Order', 'O2')!.status, 'cancelled')
+  assert.equal(rt.get<{ status: string }>('Order', 'O2', asTest)!.status, 'cancelled')
   const applied = rt.auditLog({ status: 'applied' })
   assert.equal(applied.length, 1)
   assert.deepEqual(applied[0].edits, [{ op: 'modify', object: 'Order', pk: 'O2', changes: { status: 'cancelled' } }])
@@ -146,25 +180,54 @@ test('write-back-first ordering: adapter failure blocks the ontology edit', () =
   assert.equal(result.ok, false)
   if (!result.ok) assert.equal(result.error.code, 'WRITEBACK_FAILED')
   assert.deepEqual(calls, ['adapter']) // adapter ran…
-  assert.equal(rt.get<{ status: string }>('Order', 'O2')!.status, 'pending') // …but nothing changed here
+  assert.equal(rt.get<{ status: string }>('Order', 'O2', asTest)!.status, 'pending') // …but nothing changed here
   assert.equal(rt.auditLog({ status: 'applied' }).length, 0)
 })
 
 test('a failing commit rolls back completely (no partial edits, no orphan audit rows)', () => {
   const rt = setup()
   assert.throws(() => rt.execute('corruptOrder', { orderId: 'O2' }, { actor: 'test' }))
-  assert.equal(rt.get<{ status: string }>('Order', 'O2')!.status, 'pending')
+  assert.equal(rt.get<{ status: string }>('Order', 'O2', asTest)!.status, 'pending')
+  assert.equal(rt.auditLog({ status: 'applied' }).length, 0)
+})
+
+test('actions can rewire the graph itself — links are edits too', () => {
+  const rt = setup()
+  const result = rt.execute('reassignOrder', { orderId: 'O2', toCustomerId: 'C2' }, { actor: 'test' })
+  assert.equal(result.ok, true)
+  assert.deepEqual(rt.traverse<{ id: string }>('customerOrders', 'C1', asTest).map((o) => o.id), ['O1'])
+  assert.deepEqual(rt.traverse<{ id: string }>('customerOrders', 'C2', asTest).map((o) => o.id), ['O2'])
+  assert.equal(rt.get<{ customerId: string }>('Order', 'O2', asTest)!.customerId, 'C2')
+})
+
+test('linking to a missing object rolls back the whole action', () => {
+  const rt = setup()
+  assert.throws(() => rt.execute('reassignOrder', { orderId: 'O2', toCustomerId: 'GHOST' }, { actor: 'test' }))
+  // The unlink that ran before the failing link is rolled back too.
+  assert.deepEqual(rt.traverse<{ id: string }>('customerOrders', 'C1', asTest).map((o) => o.id), ['O1', 'O2'])
+  assert.equal(rt.get<{ customerId: string }>('Order', 'O2', asTest)!.customerId, 'C1')
+  assert.equal(rt.auditLog({ status: 'applied' }).length, 0)
+})
+
+test('one-to-many cardinality is enforced at the write gate', () => {
+  const rt = setup()
+  // Linking O2 to C2 without unlinking C1 first would give the order two customers.
+  assert.throws(
+    () => rt.execute('sloppyReassign', { orderId: 'O2', toCustomerId: 'C2' }, { actor: 'test' }),
+    /one-to-many/,
+  )
+  assert.deepEqual(rt.traverse<{ id: string }>('customerOrders', 'O2', { ...asTest, direction: 'reverse' }).map((c) => c.id), ['C1'])
   assert.equal(rt.auditLog({ status: 'applied' }).length, 0)
 })
 
 test('links traverse in both directions', () => {
   const rt = setup()
   assert.deepEqual(
-    rt.traverse<{ id: string }>('customerOrders', 'C1').map((o) => o.id),
+    rt.traverse<{ id: string }>('customerOrders', 'C1', asTest).map((o) => o.id),
     ['O1', 'O2'],
   )
   assert.deepEqual(
-    rt.traverse<{ id: string }>('customerOrders', 'O2', 'reverse').map((c) => c.id),
+    rt.traverse<{ id: string }>('customerOrders', 'O2', { ...asTest, direction: 'reverse' }).map((c) => c.id),
     ['C1'],
   )
 })
@@ -172,6 +235,7 @@ test('links traverse in both directions', () => {
 test('aggregation happens at query time', () => {
   const rt = setup()
   const byStatus = rt.aggregate<{ status: string; total: number }>('Order', {
+    ...asTest,
     groupBy: (o) => o.status,
     sum: (o) => o.total,
   })
@@ -183,4 +247,56 @@ test('indexing validates rows against the model', () => {
   assert.throws(() =>
     rt.load({ objects: { Order: [{ id: 'O9', customerId: 'C1', status: 'teleported', total: 1 }] } }),
   )
+})
+
+// ── Visibility: the read-side twin of preconditions ──
+
+const visOntology = defineOntology({
+  name: 'vis',
+  objects: {
+    Doc: defineObject({
+      primaryKey: 'id',
+      properties: { id: z.string(), owner: z.string(), title: z.string() },
+      visibility: ({ object, actor }) => actor === object.owner || actor === 'user:auditor',
+    }),
+  },
+  links: {},
+  actions: {
+    renameDoc: defineAction({
+      object: 'Doc',
+      targetParam: 'docId',
+      params: { docId: z.string(), title: z.string().min(1) },
+      preconditions: [],
+      effects: ({ object, params }) => [modify('Doc', object.id as string, { title: params.title })],
+    }),
+  },
+})
+
+function visSetup() {
+  const rt = createRuntime(visOntology, new Database(':memory:'))
+  rt.load({
+    objects: {
+      Doc: [
+        { id: 'D1', owner: 'user:alice', title: 'alpha' },
+        { id: 'D2', owner: 'user:bob', title: 'beta' },
+      ],
+    },
+  })
+  return rt
+}
+
+test('visibility lives in the model: the same search returns different worlds', () => {
+  const rt = visSetup()
+  assert.deepEqual(rt.search<{ id: string }>('Doc', { actor: 'user:alice' }).map((d) => d.id), ['D1'])
+  assert.deepEqual(rt.search<{ id: string }>('Doc', { actor: 'user:auditor' }).map((d) => d.id), ['D1', 'D2'])
+})
+
+test('a hidden object is indistinguishable from a nonexistent one — even as an action target', () => {
+  const rt = visSetup()
+  assert.equal(rt.get('Doc', 'D2', { actor: 'user:alice' }), undefined)
+  const result = rt.execute('renameDoc', { docId: 'D2', title: 'x' }, { actor: 'user:alice' })
+  assert.equal(result.ok, false)
+  if (!result.ok) assert.equal(result.error.code, 'TARGET_NOT_FOUND') // no existence leak
+  // The owner performs the same action without friction.
+  assert.equal(rt.execute('renameDoc', { docId: 'D2', title: 'x' }, { actor: 'user:bob' }).ok, true)
 })

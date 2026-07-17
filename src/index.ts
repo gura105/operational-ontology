@@ -9,6 +9,8 @@ export {
   modify,
   create,
   remove,
+  link,
+  unlink,
 } from './core.js'
 export type {
   ObjectTypeDef,

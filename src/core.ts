@@ -28,6 +28,15 @@ export interface ObjectTypeDef<S extends Properties = Properties> {
    */
   properties: S
   /**
+   * Row-level visibility, attached to the model (an optional slot). Absent
+   * means visible to everyone: this reference implementation is fail-open by
+   * declaration — it has no authentication, so `actor` is self-declared and
+   * enforcement here demonstrates placement, not protection. A fail-closed
+   * deployment makes this slot required rather than optional, on top of an
+   * authenticated identity layer. See "permissions and security" in the README.
+   */
+  visibility?: (ctx: { object: Record<string, unknown>; actor: string }) => boolean
+  /**
    * Where the rows physically come from (documentation only — the integration
    * itself belongs to the data layer, outside the ontology).
    */
@@ -45,6 +54,10 @@ export function defineObject<S extends Properties>(def: ObjectTypeDef<S>): Objec
 export interface LinkTypeDef {
   from: string
   to: string
+  /**
+   * Cardinality is a model constraint, so it is enforced at the write gate:
+   * for one-to-many, the "many" side belongs to at most one "one" side.
+   */
   kind: 'one-to-many' | 'many-to-many'
   /** Physical origin of the link (a foreign key, a join table) — documentation only. */
   via?: string
@@ -65,11 +78,17 @@ export function reject(code: string, message: string): Violation {
   return { code, message }
 }
 
-/** Edits are data: what an action wants to change, decoupled from how it is applied. */
+/**
+ * Edits are data: what an action wants to change, decoupled from how it is
+ * applied. Links are edits too — actions can rewire the graph itself, not
+ * just node properties.
+ */
 export type Edit =
   | { op: 'modify'; object: string; pk: string; changes: Record<string, unknown> }
   | { op: 'create'; object: string; pk: string; data: Record<string, unknown> }
   | { op: 'delete'; object: string; pk: string }
+  | { op: 'link'; link: string; from: string; to: string }
+  | { op: 'unlink'; link: string; from: string; to: string }
 
 export const modify = (object: string, pk: string, changes: Record<string, unknown>): Edit => ({
   op: 'modify',
@@ -84,6 +103,8 @@ export const create = (object: string, pk: string, data: Record<string, unknown>
   data,
 })
 export const remove = (object: string, pk: string): Edit => ({ op: 'delete', object, pk })
+export const link = (linkName: string, from: string, to: string): Edit => ({ op: 'link', link: linkName, from, to })
+export const unlink = (linkName: string, from: string, to: string): Edit => ({ op: 'unlink', link: linkName, from, to })
 
 export interface ActionCtx<O = Record<string, unknown>, P = Record<string, unknown>> {
   /** The object the action targets, loaded from the ontology store. */
@@ -151,12 +172,13 @@ export function defineOntology(def: OntologyDef): OntologyDef {
 /**
  * Propagates an action's edits toward the systems of record.
  *
- * Ordering contract (mirrors Foundry's write-back webhooks): the adapter runs
- * BEFORE the edits are committed to the ontology store. If the adapter
- * throws, no ontology changes are applied. The reverse failure — adapter
- * succeeded, local commit fails — remains possible. This is not a distributed
- * transaction, and the reference vendor does not provide one either; see
- * "Failure semantics" in the README.
+ * The pattern leaves the consistency mechanism between the ontology and the
+ * systems of record implementation-defined, but requires it to be declared.
+ * This implementation declares write-back-first ordering (mirroring Foundry's
+ * write-back webhooks): the adapter runs BEFORE the edits are committed to
+ * the ontology store. If the adapter throws, no ontology changes are applied.
+ * The reverse failure — adapter succeeded, local commit fails — remains
+ * possible; see "Failure semantics" in the README.
  */
 export interface WritebackAdapter {
   name: string
@@ -230,6 +252,11 @@ export class Runtime {
    * This is the stand-in for the indexing pipeline (Funnel's job in Foundry).
    * It is an infrastructure entry point, not a user write path — user writes
    * go through `execute`.
+   *
+   * Caveat (v0 simplification): re-loading replaces base rows and thereby
+   * overwrites prior action edits. Foundry keeps edits in their own layer and
+   * reapplies them over the re-indexed base — see "Failure semantics" in the
+   * README.
    */
   load(snapshot: {
     objects?: Record<string, Record<string, unknown>[]>
@@ -261,52 +288,56 @@ export class Runtime {
     })()
   }
 
-  // ── Read side: query the model, not the tables ──
+  // ── Read side: query the model, not the tables — and always as someone ──
 
-  get<O = Record<string, unknown>>(type: string, pk: string): O | undefined {
-    this.#objectDef(type)
-    const row = this.#db
-      .prepare('SELECT data FROM objects WHERE type = ? AND pk = ?')
-      .get(type, pk) as { data: string } | undefined
-    return row ? (JSON.parse(row.data) as O) : undefined
+  get<O = Record<string, unknown>>(type: string, pk: string, opts: { actor: string }): O | undefined {
+    const object = this.#fetch<O>(type, pk)
+    if (object === undefined) return undefined
+    // A hidden object is indistinguishable from a nonexistent one.
+    return this.#visible(type, object as Record<string, unknown>, opts.actor) ? object : undefined
   }
 
-  search<O = Record<string, unknown>>(type: string, filter?: Partial<O> | ((o: O) => boolean)): O[] {
+  search<O = Record<string, unknown>>(
+    type: string,
+    opts: { actor: string; filter?: Partial<O> | ((o: O) => boolean) },
+  ): O[] {
     this.#objectDef(type)
     const rows = this.#db.prepare('SELECT data FROM objects WHERE type = ? ORDER BY pk').all(type) as {
       data: string
     }[]
-    const objects = rows.map((r) => JSON.parse(r.data) as O)
-    return objects.filter(matcher(filter))
+    return rows
+      .map((r) => JSON.parse(r.data) as O)
+      .filter((o) => this.#visible(type, o as Record<string, unknown>, opts.actor))
+      .filter(matcher(opts.filter))
   }
 
   /** Follow a link from one object to its neighbours. Both directions are indexed. */
   traverse<O = Record<string, unknown>>(
     linkName: string,
     pk: string,
-    direction: 'forward' | 'reverse' = 'forward',
+    opts: { actor: string; direction?: 'forward' | 'reverse' },
   ): O[] {
     const link = this.ontology.links[linkName]
     if (!link) throw new Error(`unknown link type "${linkName}"`)
     const [where, select, targetType] =
-      direction === 'forward'
+      (opts.direction ?? 'forward') === 'forward'
         ? ['from_pk', 'to_pk', link.to]
         : ['to_pk', 'from_pk', link.from]
     const rows = this.#db
       .prepare(`SELECT ${select} AS pk FROM links WHERE name = ? AND ${where} = ? ORDER BY pk`)
       .all(linkName, pk) as { pk: string }[]
     return rows
-      .map((r) => this.get<O>(targetType, r.pk))
+      .map((r) => this.get<O>(targetType, r.pk, { actor: opts.actor }))
       .filter((o): o is O => o !== undefined)
   }
 
   /** Query-time aggregation over the indexed objects. Nothing is precomputed. */
   aggregate<O = Record<string, unknown>>(
     type: string,
-    opts: AggregateOptions<O>,
+    opts: { actor: string } & AggregateOptions<O>,
   ): Record<string, { count: number; sum?: number }> {
     const out: Record<string, { count: number; sum?: number }> = {}
-    for (const obj of this.search<O>(type, opts.filter)) {
+    for (const obj of this.search<O>(type, { actor: opts.actor, filter: opts.filter })) {
       const key = opts.groupBy(obj)
       const bucket = (out[key] ??= { count: 0, ...(opts.sum ? { sum: 0 } : {}) })
       bucket.count += 1
@@ -344,7 +375,9 @@ export class Runtime {
       return { ok: false, error }
     }
 
-    const object = this.get(action.object, pk)
+    // Visibility gates action targets too: an object the actor cannot see is
+    // TARGET_NOT_FOUND — same error as a missing one, so existence never leaks.
+    const object = this.get(action.object, pk, { actor: opts.actor })
     if (!object) return refuse(reject('TARGET_NOT_FOUND', `${target} does not exist`))
 
     const ctx: ActionCtx = { object, params: parsed.data, actor: opts.actor }
@@ -412,12 +445,55 @@ export class Runtime {
     return def
   }
 
+  /** Raw fetch without visibility — for internal integrity checks only. */
+  #fetch<O = Record<string, unknown>>(type: string, pk: string): O | undefined {
+    this.#objectDef(type)
+    const row = this.#db
+      .prepare('SELECT data FROM objects WHERE type = ? AND pk = ?')
+      .get(type, pk) as { data: string } | undefined
+    return row ? (JSON.parse(row.data) as O) : undefined
+  }
+
+  #visible(type: string, object: Record<string, unknown>, actor: string): boolean {
+    const visibility = this.ontology.objects[type]?.visibility
+    return visibility ? visibility({ object, actor }) : true
+  }
+
   #applyEdits(edits: Edit[]): void {
     for (const edit of edits) {
+      if (edit.op === 'link' || edit.op === 'unlink') {
+        const linkDef = this.ontology.links[edit.link]
+        if (!linkDef) throw new Error(`unknown link type "${edit.link}"`)
+        if (edit.op === 'link') {
+          // A link is a statement about two objects — both endpoints must exist.
+          if (!this.#fetch(linkDef.from, edit.from))
+            throw new Error(`cannot link: ${linkDef.from}/${edit.from} does not exist`)
+          if (!this.#fetch(linkDef.to, edit.to))
+            throw new Error(`cannot link: ${linkDef.to}/${edit.to} does not exist`)
+          if (linkDef.kind === 'one-to-many') {
+            const existing = this.#db
+              .prepare('SELECT from_pk FROM links WHERE name = ? AND to_pk = ? AND from_pk != ?')
+              .get(edit.link, edit.to, edit.from) as { from_pk: string } | undefined
+            if (existing)
+              throw new Error(
+                `cannot link: ${linkDef.to}/${edit.to} is already linked to ` +
+                  `${linkDef.from}/${existing.from_pk} via "${edit.link}" (one-to-many — unlink first)`,
+              )
+          }
+          this.#db
+            .prepare('INSERT OR REPLACE INTO links (name, from_pk, to_pk) VALUES (?, ?, ?)')
+            .run(edit.link, edit.from, edit.to)
+        } else {
+          this.#db
+            .prepare('DELETE FROM links WHERE name = ? AND from_pk = ? AND to_pk = ?')
+            .run(edit.link, edit.from, edit.to)
+        }
+        continue
+      }
       const def = this.#objectDef(edit.object)
       const schema = this.#schemas.get(edit.object)!
       if (edit.op === 'modify') {
-        const current = this.get(edit.object, edit.pk)
+        const current = this.#fetch(edit.object, edit.pk)
         if (!current) throw new Error(`cannot modify missing object ${edit.object}/${edit.pk}`)
         const next = schema.parse({ ...current, ...edit.changes })
         this.#db

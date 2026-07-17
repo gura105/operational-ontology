@@ -24,6 +24,15 @@ export const orders = defineOntology({
     Order: defineObject({
       description: 'A sales order, unified across both legacy systems',
       primaryKey: 'id',
+      // Row-level visibility, attached to the model: a sales rep sees only
+      // the orders of their own legacy system; hq, agents, and infrastructure
+      // see everything. Types without a visibility slot are visible to all
+      // (fail-open — declared in the README).
+      visibility: ({ object, actor }) =>
+        actor === `user:${String(object.sourceSystem)}-sales` ||
+        actor === 'user:hq' ||
+        actor.startsWith('agent:') ||
+        actor.startsWith('system:'),
       properties: {
         id: z.string(),
         customerId: z.string(),

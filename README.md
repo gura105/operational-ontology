@@ -8,6 +8,20 @@
 
 Palantir Foundry's Ontology is one implementation of this pattern. This repository is another: a minimal, readable reference implementation — the concept, minimized. It is a working definition, not a framework. Read it, fork it, steal the ideas.
 
+## Why another word?
+
+Because "ontology" is doing too many jobs. Philosophy uses it for the study of what exists. OWL/RDF use it for formal, machine-reasonable semantics. Knowledge graphs borrowed it for entity-relationship graphs. And in 2026 the major data platforms arrived, shipping "ontology"-branded context layers that ground AI answers in business meaning — genuinely useful, and read-side all the way. Five meanings, one word, and conversations about "the ontology" quietly fail.
+
+| called an "ontology" | what it is | governed writes? |
+| --- | --- | --- |
+| philosophical ontology | the study of what exists | — |
+| formal ontology (OWL / RDF) | machine-reasonable semantics | no |
+| knowledge graph | entities and relationships — writable as data, not as operations | no |
+| AI context layer (the 2026 wave of "ontology"-branded platform features) | semantic grounding for AI answers | no |
+| **operational ontology (Foundry-style)** | business domain schema **+ rule-carrying actions** | **yes** |
+
+Every row is a legitimate tool, and this table is not a ranking. But the one property that changes what a layer can *do* — whether it accepts writes, governed by business rules — cuts across the whole table and had no name. This repository gives it one.
+
 ## The four properties
 
 A system implements the pattern when all four hold:
@@ -45,6 +59,8 @@ The MCP tool surface is *generated from the model*: `search_order`, `traverse_cu
 
 - **There is intentionally no raw SQL tool.** The operation space an agent gets is exactly the operation space the model defines. The absence is the point.
 - **The same precondition that gates a human gates the agent.** When the agent tries to cancel a shipped order it receives `{ "code": "SHIPPED_ORDER_CANNOT_BE_CANCELLED", ... }` — a machine-readable refusal it can read, recover from, and explain to its user.
+
+Reads are scoped the same way: every query runs *as* an actor, and model-attached visibility policies decide which objects that actor's world contains — the agent session included.
 
 **The business rule lives in the ontology, not in the prompt.**
 
@@ -90,6 +106,10 @@ const ontology = defineOntology({
 
 The definition is a plain value — enumerable, serializable, diffable. That is what makes the MCP surface derivable and the write path closed: `Runtime.execute()` is the only public method that mutates state, and it always runs *validate → preconditions → effects → write-back → atomic commit of edits + audit entry*.
 
+Reads carry identity too: every `search` / `get` / `traverse` / `aggregate` runs as an `actor`, and an object type may attach a `visibility` predicate — row-level security in its minimal form, living in the model like everything else. A hidden object is indistinguishable from a nonexistent one, for reads and for action targets alike.
+
+Edits are data too: `modify`, `create`, `delete` — and `link` / `unlink`, so actions can rewire the instance graph, not just node properties. The link *types* are part of the model and don't change here; which links exist between which objects is state, and state only changes through actions — cardinality included: the runtime refuses a `link` that would give an order two customers. "Reassign this order to another customer" is an unlink, a link, and a modify, applied atomically under the same preconditions as everything else. (Changing the model itself — new object types, new link types — is schema evolution; see the FAQ.)
+
 The model being data rather than classes is not an aesthetic choice. `class Order { cancel() {} }` cannot be enumerated into agent tools, shared across applications, or inspected at runtime — it is an application's private domain layer. The whole point here is that the domain layer stops being private.
 
 ## Where this sits
@@ -114,13 +134,17 @@ Three layers. This repository implements the middle one only.
 
 **Downstream contract:** write-back is a governed **side effect**, not a distributed transaction (see below).
 
-One consequence is worth stating because it separates this pattern from read-only layers: **a read-only layer can stay virtual; a layer that accepts writes must own state.** Edits exist here before — or instead of — the systems of record (`assignOrder` writes state no legacy system has a column for), so the ontology keeps its own store and its own audit log. What this repo does *not* own: the indexing machinery that makes reads fast at enterprise scale (incremental indexing, adjacency indexes, search backends). That is how Foundry serves billions of objects; it is an implementation of the layer, not part of the pattern.
+One consequence is worth stating because it separates this pattern from query-side layers: **a layer that only answers queries can stay virtual; a layer that accepts writes must own state.** Edits exist here before — or instead of — the systems of record (`assignOrder` writes state no legacy system has a column for), so the ontology keeps its own store and its own audit log. What this repo does *not* own: the indexing machinery that makes reads fast at enterprise scale (incremental indexing, adjacency indexes, search backends). That is how Foundry serves billions of objects; it is an implementation of the layer, not part of the pattern.
 
 ## Failure semantics
 
-Honesty section. Cross-system consistency is the hardest unsolved part of this pattern, and this repository does not solve it — neither, notably, does the reference vendor. Foundry's write-back webhooks run *before* ontology edits and block them on failure, but Palantir's own documentation states the reverse failure (external system succeeded, ontology edit failed) remains possible. This implementation mirrors exactly that contract: the `WritebackAdapter` runs before the local commit; if it throws, nothing changes locally; if the local commit fails after the adapter succeeded, the systems have diverged and reconciliation is on you. If someone tells you their ontology product does distributed transactions against SAP, ask harder questions.
+**At the pattern level.** Operational Ontology does not prescribe a consistency *mechanism* between the ontology and the systems of record — a distributed transaction, an ordering contract, an outbox, a reconciliation job are all implementation choices, the same way an inverted index is an implementation choice for link traversal. One asymmetry, though: an index is invisible to the contract, while failure semantics are observable — users can watch systems diverge. So the pattern does require one thing here: **an implementation must declare its failure semantics.** Divergence you can reason about is an engineering problem; divergence you discover in production is an incident. If someone tells you their ontology product does distributed transactions against SAP, ask to see the declaration.
+
+**What this implementation declares.** It adopts the ordering of Foundry's write-back webhooks (one of Foundry's two modes — the other runs side effects *after* the edit): the `WritebackAdapter` runs before the local commit, so if the system of record refuses, nothing changes in the ontology. The reverse failure — adapter succeeded, local commit failed — remains possible, and Palantir's own documentation acknowledges the same gap. When it happens, the systems have diverged and reconciliation is on you.
 
 Within its own store, the runtime is honestly transactional: an action's edits and its audit entry commit atomically (single SQLite transaction), and rejected attempts are logged too.
+
+**Re-indexing vs edits.** The ontology store holds two kinds of state: the base indexed from the sources, and the edits actions have made on top. Source systems keep running, so every implementation of this pattern must decide what happens when re-indexing meets edits. Foundry keeps edits in their own layer and reapplies them over the freshly indexed base; this implementation materializes a single row per object, so re-running `load()` overwrites edits — a v0 simplification, stated rather than hidden. If `assignOrder` state survives a re-index in your system, someone built that reconciliation on purpose.
 
 ## Non-goals
 
@@ -130,7 +154,7 @@ Scope is frozen by design. This is a reference implementation — the companion 
 - **No pipeline framework.** Integration is a prerequisite; the demo uses plain SQL.
 - **No indexing infrastructure.** Naive queries are fine at demo scale; scale is a property of implementations, not of the pattern.
 - **No OWL/RDF.** Academic ontologies are semantic-only — no actions, no kinetics. Different tool for a different job.
-- **No general authorization system.** Preconditions decide whether an operation is *valid*; who may *attempt* it is a policy engine's job.
+- **No general authorization system.** The pattern-level part is here — identity flows through every call, and visibility attaches to the model. The mechanism (groups, attributes, policy languages, cell-level security, propagation) is a policy engine's job.
 - **No npm package.** Fork it; don't depend on it.
 - **Not a Foundry alternative.** Foundry is one implementation of this pattern, vertically integrated across all three layers. This repo names and demonstrates the middle layer.
 
@@ -145,13 +169,21 @@ Scope is frozen by design. This is a reference implementation — the companion 
 
 **Isn't this just CRUD with validation?** The parts are familiar; the configuration isn't. CRUD validation lives inside one application, on tables that application owns. Here the model sits on data *other systems* own, is shared by every consumer (UIs, scripts, agents), closes all write paths except actions, audits every attempt, and pushes accepted changes back to the systems of record. It is closer to "a CQRS command layer extracted from the application and placed over someone else's data."
 
+**Isn't a knowledge graph writable too?** Yes — SPARQL UPDATE will happily set `status = 'cancelled'`. What it cannot do is *refuse* to, because the order already shipped. An update is a data edit; an operation carries preconditions, an audit trail, and write-back. The difference between this pattern and a knowledge graph is not whether the graph can change — it is whether changes are business operations or raw edits.
+
 **Why not OWL/RDF?** Those model what things *are* (semantic). This pattern's distinguishing half is what you can *do* (kinetic): actions, preconditions, audit, write-back. A reasoner cannot cancel an order.
 
 **Why TypeScript definitions instead of YAML?** Business rules are code — a YAML rules-expression-language is how toy rule engines are born. TS object literals keep the model enumerable *and* the rules type-checked. Structure as data, rules as functions — the same split Foundry makes between Ontology Manager and Functions.
 
-**What about transactions and rollback?** Three different domains, three different answers: dataset versioning/rollback is the data layer's job (in Foundry: catalog transactions and branching); atomic application of an action's edits is this layer's job (implemented here as a real SQLite transaction); cross-system write-back is transactional in *no* implementation we know of — see [Failure semantics](#failure-semantics).
+**What about transactions and rollback?** Three different domains, three different answers: dataset versioning/rollback is the data layer's job (in Foundry: catalog transactions and branching); atomic application of an action's edits is this layer's job (implemented here as a real SQLite transaction); and the consistency mechanism for cross-system write-back is implementation-defined — the pattern requires it to be *declared*, not assumed. This implementation declares write-back-first ordering; see [Failure semantics](#failure-semantics).
 
-**Bring your own frontend?** Yes. The application contract is two verbs — query (`search`/`get`/`traverse`/`aggregate`) and `execute(action)` — for humans and agents alike. A dashboard is the first verb; the "cancel" button is the second. Rules follow the model, not the frontend.
+**What about permissions and security?** Three different things hide in that question, and they split along the same line as everything else in this repository. *Authentication* is outside the pattern: an identity arrives already established. (Here, `actor` is a self-declared string — this implementation demonstrates *placement*, not protection.) *Authorization*'s **placement** is part of the pattern — Foundry counts dynamic security among the Ontology's kinetic elements, and policies attach to object types and actions, binding every consumer's reads and writes alike — while its **mechanism** (groups, attributes, policy languages, cell-level security, propagation from the data layer) is implementation-defined. And *preconditions* are neither: they are validity, not permission. The vocabulary worth keeping: **visibility** (you can't see it), **permission** (you can't do it — *not you*), **precondition** (nobody can — *not ever*). Agents recover differently from each, which is why this implementation keeps them distinct; Foundry blends permission and validity in its action submission criteria and conforms all the same — the separation is a recommendation, not a requirement.
+
+Two declared design choices follow. First, the slots: `preconditions` is a required key where an empty list is a stated decision, because gated writes are pattern core; `visibility` is an optional key, because authorization's *existence* is implementation-defined. Second, the polarity — defaults must be declared, like failure semantics: this implementation is **fail-open** (no `visibility` means visible to everyone). A reference implementation without authentication cannot be meaningfully fail-closed; pretending otherwise would be security theater. Foundry's baseline is the opposite — discretionary grants expand access from zero, and mandatory markings deny conjunctively on top. A fail-closed deployment of this pattern is a one-knob change: make the `visibility` slot required instead of optional, on top of an authenticated identity layer.
+
+**How does the ontology itself change?** Schema evolution — new object types, changed properties, retired links — is real and out of scope here, like bounded contexts: Foundry has versioning and proposal machinery for it, and the academic field studies it as *ontology evolution*. What this repository contributes is the precondition for evolving safely: the model is a plain value, so it can be diffed, versioned, and reviewed like any other code. Reverse domain modeling is not a one-shot step; the model keeps being re-fit to the business.
+
+**Bring your own frontend?** Yes. The application contract is two verbs — query (`search`/`get`/`traverse`/`aggregate`) and `execute(action)` — for humans and agents alike, and every call is made *as* an actor. A dashboard is the first verb; the "cancel" button is the second. Rules follow the model, not the frontend.
 
 ## Status
 
