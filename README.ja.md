@@ -2,6 +2,9 @@
 
 # Operational Ontology
 
+[![CI](https://github.com/gura105/operational-ontology/actions/workflows/ci.yml/badge.svg)](https://github.com/gura105/operational-ontology/actions/workflows/ci.yml)
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](./LICENSE)
+
 > **Operational Ontology（操作できるオントロジー）とは、自分が所有していないシステム群のデータの上に構築される共有ドメインモデルである — オブジェクト・リンク・アクションで構成され、読み取りはモデルを辿り、書き込みは業務ルールを持つアクションだけを通り、監査され、その変更が触れる状態を所有するシステムオブレコードへ書き戻される。**
 >
 > セマンティックレイヤーはビジネスを「読む」ためのもの。Operational Ontology はビジネスを「動かす」ためのもの。

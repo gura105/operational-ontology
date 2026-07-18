@@ -18,6 +18,15 @@
     "ai-agents"
   ],
   "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/gura105/operational-ontology.git"
+  },
+  "homepage": "https://github.com/gura105/operational-ontology#readme",
+  "bugs": {
+    "url": "https://github.com/gura105/operational-ontology/issues"
+  },
+  "packageManager": "pnpm@11.10.0",
   "engines": {
     "node": ">=24"
   },
