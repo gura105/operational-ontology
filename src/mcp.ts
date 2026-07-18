@@ -4,7 +4,7 @@
  * Generates an MCP server from an ontology definition. Because the model is
  * data, the agent-facing tool surface is derived, not hand-written:
  *
- *   - per object type:  search_<object>, get_<object>
+ *   - per object type:  search_<object>, get_<object>, aggregate_<object>
  *   - per link type:    traverse_<link> (forward and reverse)
  *   - per action:       <action>, guarded by the same preconditions as
  *                       every other caller
@@ -52,30 +52,36 @@ export function buildMcpServer(rt: Runtime, opts: { agent?: string } = {}): McpS
       async (args: Record<string, unknown>, extra: { sessionId?: string }) =>
         asJson(rt.get(typeName, String(args[def.primaryKey]), { actor: actorOf(extra) }) ?? null),
     )
+    // Aggregate inputs are model-derived too: property names come from the
+    // definition, and only numeric properties are summable.
+    const propertyKeys = Object.keys(def.properties) as [string, ...string[]]
+    const numericKeys = Object.entries(def.properties)
+      .filter(([, schema]) => schema instanceof z.ZodNumber)
+      .map(([key]) => key)
+    const aggregateShape: Record<string, z.ZodType> = {
+      group_by: z.enum(propertyKeys),
+      filter: z.object(filterShape).optional(),
+    }
+    if (numericKeys.length > 0) aggregateShape.sum = z.enum(numericKeys as [string, ...string[]]).optional()
     server.registerTool(
       `aggregate_${snake(typeName)}`,
       {
         description:
           `Group ${typeName} objects by a property, counting each group and optionally summing ` +
           'a numeric property. Query-time aggregation — nothing is precomputed.',
-        inputSchema: {
-          group_by: z.string(),
-          sum: z.string().optional(),
-          filter: z.record(z.string(), z.any()).optional(),
-        },
+        inputSchema: aggregateShape,
       },
-      async (
-        args: { group_by: string; sum?: string; filter?: Record<string, unknown> },
-        extra: { sessionId?: string },
-      ) =>
-        asJson(
+      async (rawArgs: Record<string, unknown>, extra: { sessionId?: string }) => {
+        const args = rawArgs as { group_by: string; sum?: string; filter?: Record<string, unknown> }
+        return asJson(
           rt.aggregate(typeName, {
             actor: actorOf(extra),
             filter: args.filter ? prune(args.filter) : undefined,
             groupBy: (o: Record<string, unknown>) => String(o[args.group_by]),
             ...(args.sum ? { sum: (o: Record<string, unknown>) => Number(o[args.sum!] ?? 0) } : {}),
           }),
-        ),
+        )
+      },
     )
   }
 
@@ -108,11 +114,20 @@ export function buildMcpServer(rt: Runtime, opts: { agent?: string } = {}): McpS
         inputSchema: action.params,
       },
       async (params: Record<string, unknown>, extra: { sessionId?: string }) => {
-        const result = rt.execute(actionName, params, { actor: actorOf(extra) })
-        if (!result.ok) {
-          return { ...asJson({ error: result.error }), isError: true }
+        try {
+          const result = rt.execute(actionName, params, { actor: actorOf(extra) })
+          if (!result.ok) {
+            return { ...asJson({ error: result.error }), isError: true }
+          }
+          return asJson({ applied: result.edits })
+        } catch (e) {
+          // Crashes surface in the same machine-readable shape as refusals —
+          // no internal stack dumps in an agent's context window.
+          return {
+            ...asJson({ error: { code: 'INTERNAL', message: e instanceof Error ? e.message : String(e) } }),
+            isError: true,
+          }
         }
-        return asJson({ applied: result.edits })
       },
     )
   }

@@ -383,19 +383,43 @@ export class Runtime {
     const target = `${action.object}/${pk}`
     const refuse = (error: Violation): ActionResult => refuseAs(target, parsed.data, error)
 
-    // Visibility gates action targets too: an object the actor cannot see is
-    // TARGET_NOT_FOUND — same error as a missing one, so existence never leaks.
-    const object = this.get(action.object, pk, { actor: opts.actor })
+    // Rule evaluation is guarded: a crashing visibility predicate,
+    // precondition, or effect is audited as RULE_CRASHED before the error
+    // surfaces — crashes are attempts too.
+    const crashed = (e: unknown): never => {
+      this.#audit({
+        actor: opts.actor,
+        action: actionName,
+        target,
+        params: parsed.data,
+        status: 'rejected',
+        error: reject('RULE_CRASHED', e instanceof Error ? e.message : String(e)),
+      })
+      throw e
+    }
+
+    let object: Record<string, unknown> | undefined
+    try {
+      // Visibility gates action targets too: an object the actor cannot see is
+      // TARGET_NOT_FOUND — same error as a missing one, so existence never leaks.
+      object = this.get(action.object, pk, { actor: opts.actor })
+    } catch (e) {
+      crashed(e)
+    }
     if (!object) return refuse(reject('TARGET_NOT_FOUND', `${target} does not exist`))
 
     const ctx: ActionCtx = { object, params: parsed.data, actor: opts.actor }
 
-    for (const precondition of action.preconditions) {
-      const violation = precondition(ctx)
-      if (violation) return refuse(violation)
+    let edits: Edit[] = []
+    try {
+      for (const precondition of action.preconditions) {
+        const violation = precondition(ctx)
+        if (violation) return refuse(violation)
+      }
+      edits = action.effects(ctx)
+    } catch (e) {
+      crashed(e)
     }
-
-    const edits = action.effects(ctx)
 
     if (action.writeback) {
       if (!this.#writeback) {
@@ -425,6 +449,9 @@ export class Runtime {
         params: parsed.data,
         status: 'rejected',
         error: reject('COMMIT_FAILED', e instanceof Error ? e.message : String(e)),
+        // The edits are on the record even though they did not apply: after a
+        // write-back-first action, they are what already reached the source.
+        edits,
       })
       throw e
     }
@@ -526,9 +553,14 @@ export class Runtime {
           .run(JSON.stringify(next), edit.object, edit.pk)
       } else if (edit.op === 'create') {
         const data = schema.parse(edit.data)
+        if (String(data[def.primaryKey]) !== edit.pk) {
+          throw new Error(
+            `create pk mismatch for ${edit.object}: edit says "${edit.pk}", data says "${String(data[def.primaryKey])}"`,
+          )
+        }
         this.#db
           .prepare('INSERT INTO objects (type, pk, data) VALUES (?, ?, ?)')
-          .run(edit.object, String(data[def.primaryKey]), JSON.stringify(data))
+          .run(edit.object, edit.pk, JSON.stringify(data))
       } else {
         // RESTRICT: an object with links still attached refuses to die — unlink first.
         for (const [name, link] of Object.entries(this.ontology.links)) {

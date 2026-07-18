@@ -36,7 +36,8 @@ export const orders = defineOntology({
       properties: {
         id: z.string(),
         customerId: z.string(),
-        status: z.enum(['pending', 'assigned', 'shipped', 'cancelled']),
+        // Source-backed: both legacy systems master this value.
+        status: z.enum(['pending', 'shipped', 'cancelled']),
         total: z.number().int(), // minor units — money is not a float
         assignee: z.string().nullable(),
         // Which system of record this order lives in — write-back routes on this.
@@ -103,8 +104,10 @@ export const orders = defineOntology({
     }),
 
     /**
-     * Assignment exists only in the ontology layer — neither legacy system
-     * has an assignee column. Edits can live above the systems of record.
+     * A purely ontology-owned decision: neither legacy system has an assignee
+     * column, so the ontology's own store is the system of record for it.
+     * Note what this action does NOT touch — `status` is source-backed, and
+     * assignment has no business changing it.
      */
     assignOrder: defineAction({
       description: 'Assign a pending order to a person for fulfilment.',
@@ -120,9 +123,7 @@ export const orders = defineOntology({
             ? reject('ORDER_NOT_ASSIGNABLE', `order ${object.id} is ${object.status}, only pending orders can be assigned`)
             : undefined,
       ],
-      effects: ({ object, params }) => [
-        modify('Order', object.id as string, { status: 'assigned', assignee: params.assignee }),
-      ],
+      effects: ({ object, params }) => [modify('Order', object.id as string, { assignee: params.assignee })],
     }),
   },
 })

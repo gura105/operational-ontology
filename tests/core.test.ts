@@ -8,6 +8,7 @@ import assert from 'node:assert/strict'
 import Database from 'better-sqlite3'
 import { z } from 'zod'
 import {
+  create,
   createRuntime,
   defineAction,
   defineLink,
@@ -107,6 +108,37 @@ const ontology = defineOntology({
       effects: ({ object }) => [
         unlink('customerOrders', object.customerId as string, object.id as string),
         remove('Order', object.id as string),
+      ],
+    }),
+    landmine: defineAction({
+      // A crashing rule — must be audited as RULE_CRASHED, not lost.
+      object: 'Order',
+      targetParam: 'orderId',
+      params: { orderId: z.string() },
+      preconditions: [
+        () => {
+          throw new Error('precondition crashed')
+        },
+      ],
+      effects: () => [],
+    }),
+    explodingEffects: defineAction({
+      object: 'Order',
+      targetParam: 'orderId',
+      params: { orderId: z.string() },
+      preconditions: [],
+      effects: () => {
+        throw new Error('effects crashed')
+      },
+    }),
+    conjureOrder: defineAction({
+      // Creates with a pk that disagrees with the data — the runtime must refuse.
+      object: 'Order',
+      targetParam: 'orderId',
+      params: { orderId: z.string() },
+      preconditions: [],
+      effects: () => [
+        create('Order', 'CLAIMED', { id: 'ACTUAL', customerId: 'C1', status: 'pending', total: 1 }),
       ],
     }),
     mangleId: defineAction({
@@ -271,6 +303,20 @@ test('links traverse in both directions', () => {
     rt.traverse<{ id: string }>('customerOrders', 'O2', { ...asTest, direction: 'reverse' }).map((c) => c.id),
     ['C1'],
   )
+})
+
+test('crashing rules are audited too — RULE_CRASHED, then the error surfaces', () => {
+  const rt = setup()
+  assert.throws(() => rt.execute('landmine', { orderId: 'O2' }, { actor: 'test' }), /precondition crashed/)
+  assert.throws(() => rt.execute('explodingEffects', { orderId: 'O2' }, { actor: 'test' }), /effects crashed/)
+  const rejected = rt.auditLog({ status: 'rejected' })
+  assert.deepEqual(rejected.map((e) => e.error?.code), ['RULE_CRASHED', 'RULE_CRASHED'])
+})
+
+test('create refuses a pk that disagrees with the data', () => {
+  const rt = setup()
+  assert.throws(() => rt.execute('conjureOrder', { orderId: 'O2' }, { actor: 'test' }), /pk mismatch/)
+  assert.equal(rt.get('Order', 'ACTUAL', asTest), undefined)
 })
 
 test('delete is RESTRICT: a linked object refuses to die — unlink first', () => {
