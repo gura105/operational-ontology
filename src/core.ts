@@ -27,7 +27,11 @@ export interface ObjectTypeDef<S extends Properties = Properties> {
   primaryKey: string
   /**
    * Property schema. Validates rows at indexing time and edits at write time,
-   * and is reused verbatim to generate MCP tool schemas.
+   * and is reused verbatim to generate MCP tool schemas. The runtime stores
+   * what a schema produces and re-validates stored values through the same
+   * schema on later writes — so a schema must accept its own output
+   * (validate-and-normalize, not one-way transform). Enforced at definition
+   * time for `owned` defaults; declared for everything else.
    */
   properties: S
   /**
@@ -70,7 +74,6 @@ export function defineObject<S extends Properties>(def: ObjectTypeDef<S>): Objec
     throw new Error('an ontology-owned type has no source — drop `source` or the `owned: true`')
   }
   if (def.owned && def.owned !== true) {
-    const normalized: Record<string, unknown> = {}
     for (const [key, fallback] of Object.entries(def.owned)) {
       if (!Object.hasOwn(def.properties, key)) {
         throw new Error(`owned property "${key}" is not one of the defined properties`)
@@ -78,43 +81,61 @@ export function defineObject<S extends Properties>(def: ObjectTypeDef<S>): Objec
       if (key === def.primaryKey) {
         throw new Error(`the primary key "${key}" cannot be ontology-owned`)
       }
-      const parsed = (def.properties[key] as z.ZodType).safeParse(fallback)
+      const property = def.properties[key] as z.ZodType
+      const parsed = property.safeParse(fallback)
       if (!parsed.success) {
         throw new Error(`default for owned property "${key}" does not satisfy its schema`)
       }
-      if (canonical(parsed.data) === undefined) {
-        throw new Error(`default for owned property "${key}" must be JSON-representable`)
+      // Owned values live in the store and travel through re-indexing, so
+      // both the declared default and what the schema makes of it must be
+      // plain JSON data — and the schema must accept its own output, because
+      // the runtime stores normalized values and re-validates them later.
+      if (canonical(fallback) === undefined || canonical(parsed.data) === undefined) {
+        throw new Error(`default for owned property "${key}" must be plain JSON data`)
       }
-      // Keep the schema-normalized value: rows and overlay patches store what
-      // the schema produces, so "back at the default" must compare against
-      // the same normal form.
-      normalized[key] = parsed.data
+      const again = property.safeParse(parsed.data)
+      if (!again.success || canonical(again.data) !== canonical(parsed.data)) {
+        throw new Error(
+          `the schema for owned property "${key}" must accept its own output — ` +
+            'the runtime stores normalized values and re-validates them on later writes',
+        )
+      }
     }
-    return { ...def, owned: normalized }
   }
   return def
 }
 
 /**
- * Canonical JSON of a value — object keys sorted at every depth — so
- * structurally equal values compare equal regardless of key order. Returns
- * undefined for values JSON cannot represent.
+ * Canonical JSON of a plain-JSON value — object keys sorted at every depth,
+ * so structurally equal values compare equal regardless of key order.
+ * Returns undefined for anything JSON cannot faithfully round-trip: Dates
+ * and other class instances, Maps, functions, symbols, BigInt, NaN and
+ * Infinity, undefined at any depth. What the store persists must survive
+ * the trip unchanged, so "not plain JSON" means "not a storable value".
  */
 function canonical(value: unknown): string | undefined {
-  const sort = (v: unknown): unknown =>
-    v && typeof v === 'object' && !Array.isArray(v)
-      ? Object.fromEntries(
-          Object.entries(v as Record<string, unknown>)
-            .sort(([a], [b]) => (a < b ? -1 : 1))
-            .map(([k, inner]) => [k, sort(inner)]),
-        )
-      : Array.isArray(v)
-        ? v.map(sort)
-        : v
+  const sort = (v: unknown): unknown => {
+    if (v === null || typeof v === 'string' || typeof v === 'boolean') return v
+    if (typeof v === 'number') {
+      if (!Number.isFinite(v)) throw new RangeError('not plain JSON')
+      return v
+    }
+    if (Array.isArray(v)) return v.map(sort)
+    if (typeof v === 'object') {
+      const proto = Object.getPrototypeOf(v)
+      if (proto !== Object.prototype && proto !== null) throw new RangeError('not plain JSON')
+      return Object.fromEntries(
+        Object.entries(v as Record<string, unknown>)
+          .sort(([a], [b]) => (a < b ? -1 : 1))
+          .map(([k, inner]) => [k, sort(inner)]),
+      )
+    }
+    throw new RangeError('not plain JSON') // undefined, function, symbol, bigint
+  }
   try {
     return JSON.stringify(sort(value))
   } catch {
-    return undefined // BigInt, circular — not JSON, so not an owned value
+    return undefined
   }
 }
 
@@ -280,7 +301,18 @@ export interface OntologyDef {
 }
 
 export function defineOntology(def: OntologyDef): OntologyDef {
-  const viaTwins = new Map<string, string>()
+  for (const [kind, record] of [
+    ['object type', def.objects],
+    ['link type', def.links],
+    ['action', def.actions],
+  ] as const) {
+    for (const name of Object.keys(record)) {
+      if (name === '') throw new Error(`"" is not a valid ${kind} name`)
+    }
+  }
+  // (type, property) pairs, never a joined string: names are data, and data
+  // does not get to invent delimiters.
+  const viaTwins = new Map<string, Set<string>>()
   for (const [name, link] of Object.entries(def.links)) {
     for (const end of [link.from, link.to]) {
       if (!Object.hasOwn(def.objects, end)) {
@@ -297,12 +329,12 @@ export function defineOntology(def: OntologyDef): OntologyDef {
       }
       // A property mirrors at most one link — two links claiming the same
       // twin could never both agree with it.
-      const twin = `${link.to}.${link.viaProperty}`
-      const holder = viaTwins.get(twin)
-      if (holder) {
-        throw new Error(`links "${holder}" and "${name}" both declare ${twin} as their viaProperty`)
+      let claimed = viaTwins.get(link.to)
+      if (!claimed) viaTwins.set(link.to, (claimed = new Set()))
+      if (claimed.has(link.viaProperty)) {
+        throw new Error(`two links both declare ${link.to}.${link.viaProperty} as their viaProperty`)
       }
-      viaTwins.set(twin, name)
+      claimed.add(link.viaProperty)
       // The link and its property twin are one fact, so they must sit on the
       // same side of the authority line — otherwise every consistent change
       // would straddle it, and nothing could ever move them.
@@ -318,7 +350,7 @@ export function defineOntology(def: OntologyDef): OntologyDef {
       // the unlinked state.
       if (link.owned && to.owned !== true && to.owned?.[link.viaProperty] !== null) {
         throw new Error(
-          `link "${name}": the ontology-owned viaProperty ${twin} needs default null — ` +
+          `link "${name}": the ontology-owned viaProperty ${link.to}.${link.viaProperty} needs default null — ` +
             'a freshly indexed row starts unlinked',
         )
       }
@@ -344,6 +376,11 @@ export function defineOntology(def: OntologyDef): OntologyDef {
  * the ontology store. If the adapter throws, no ontology changes are applied.
  * The reverse failure — adapter succeeded, local commit fails — remains
  * possible; see "Failure semantics" in the README.
+ *
+ * The adapter speaks to the systems of record and to nothing else — the
+ * ontology store is the runtime's alone. It receives its own copy of the
+ * edit plan, and the observable violation of the boundary (a transaction
+ * left open on the store) is rolled back and refused (FOREIGN_TRANSACTION).
  */
 export interface WritebackAdapter {
   name: string
@@ -400,6 +437,13 @@ export class Runtime {
   readonly #db: Database
   readonly #writeback?: WritebackAdapter
   readonly #schemas = new Map<string, z.ZodObject<Properties>>()
+  /**
+   * Canonical form of each owned default's schema OUTPUT, per type. The raw
+   * declared default is what load() feeds the schema (input space); this is
+   * what "back at the default" compares against (output space). Keeping the
+   * two apart means schema output is never re-fed as schema input.
+   */
+  readonly #ownedBaseline = new Map<string, Record<string, string>>()
 
   constructor(ontology: OntologyDef, db: Database, opts: { writeback?: WritebackAdapter } = {}) {
     this.ontology = ontology
@@ -407,6 +451,15 @@ export class Runtime {
     this.#writeback = opts.writeback
     for (const [name, obj] of Object.entries(ontology.objects)) {
       this.#schemas.set(name, z.object(obj.properties))
+      if (obj.owned && obj.owned !== true) {
+        const baseline: Record<string, string> = {}
+        for (const [key, fallback] of Object.entries(obj.owned)) {
+          const encoded = canonical((obj.properties[key] as z.ZodType).parse(fallback))
+          if (encoded === undefined) throw new Error(`default for owned property "${key}" must be plain JSON data`)
+          baseline[key] = encoded
+        }
+        this.#ownedBaseline.set(name, baseline)
+      }
     }
     this.#db.exec(`
       CREATE TABLE IF NOT EXISTS objects (
@@ -807,6 +860,30 @@ export class Runtime {
       }
     }
 
+    // Foreign code ran since the entry check — rules and the adapter. If any
+    // of it left a transaction open on this connection, the commit below
+    // would be a savepoint inside it: rollback-able after success was
+    // reported, audit entry included. Undo the intrusion and refuse loudly —
+    // the ontology store is the runtime's alone.
+    if (this.#db.inTransaction) {
+      this.#db.exec('ROLLBACK')
+      const violation = reject(
+        'FOREIGN_TRANSACTION',
+        'a rule or the write-back adapter left a transaction open on the ontology store — ' +
+          'rolled back; model code and adapters must not touch this database',
+      )
+      this.#audit({
+        actor: opts.actor,
+        action: actionName,
+        target,
+        params: parsed.data,
+        status: 'rejected',
+        error: violation,
+        edits,
+      })
+      throw new Error(violation.message)
+    }
+
     // Edits and their audit entry commit together or not at all.
     try {
       this.#db.transaction(() => {
@@ -933,34 +1010,40 @@ export class Runtime {
 
   /**
    * A targetless action skipped the visibility gate because it has no
-   * target — so its plan must not touch anything that already exists.
-   * Creating objects and wiring them to each other is in scope; a modify,
-   * delete, or link endpoint on pre-existing state would turn the missing
-   * gate into an existence probe, and is refused.
+   * target — so its plan is held to exactly what the docs promise: create
+   * objects, and wire the objects it created to each other. Anything else —
+   * a modify, a delete, a link endpoint that is not one of its creations —
+   * would turn the missing gate into an existence probe, and is refused.
+   * Identity is tracked as (type, pk) pairs, never a joined string: names
+   * are data, and data does not get to invent delimiters.
    */
   #validateTargetlessScope(edits: Edit[]): void {
-    const created = new Set<string>()
+    const created = new Map<string, Set<string>>()
     const outOfScope = (what: string): never => {
       throw new PlanViolation(
         reject(
           'TARGETLESS_SCOPE',
           `a targetless action may only create objects and wire them to each other — ` +
-            `${what} is pre-existing state, which needs a targeted action and its visibility gate`,
+            `${what}; anything further needs a targeted action and its visibility gate`,
         ),
       )
     }
     for (const edit of edits) {
       if (edit.op === 'create') {
-        created.add(`${edit.object}/${edit.pk}`)
+        let pks = created.get(edit.object)
+        if (!pks) created.set(edit.object, (pks = new Set()))
+        pks.add(edit.pk)
       } else if (edit.op === 'modify' || edit.op === 'delete') {
-        if (!created.has(`${edit.object}/${edit.pk}`)) outOfScope(`${edit.op} on ${edit.object}/${edit.pk}`)
+        outOfScope(`${edit.op} is outside that scope`)
       } else {
         const linkDef = this.ontology.links[edit.link]!
         for (const [endType, endPk] of [
           [linkDef.from, edit.from],
           [linkDef.to, edit.to],
         ] as const) {
-          if (!created.has(`${endType}/${endPk}`)) outOfScope(`${endType}/${endPk} (an endpoint of "${edit.link}")`)
+          if (!created.get(endType)?.has(endPk)) {
+            outOfScope(`${endType} "${endPk}" is not something this plan created`)
+          }
         }
       }
     }
@@ -1086,13 +1169,14 @@ export class Runtime {
             .prepare('SELECT patch FROM overlay WHERE type = ? AND pk = ?')
             .get(edit.object, edit.pk) as { patch: string } | undefined
           const patch: Record<string, unknown> = row ? (JSON.parse(row.patch) as Record<string, unknown>) : {}
+          const baseline = this.#ownedBaseline.get(edit.object) ?? {}
           for (const key of Object.keys(edit.changes)) {
             const value = (next as Record<string, unknown>)[key]
             const encoded = canonical(value)
             if (encoded === undefined) {
-              throw new Error(`ontology-owned edit to ${edit.object}/${edit.pk}.${key} is not JSON-representable`)
+              throw new Error(`ontology-owned edit to ${edit.object}/${edit.pk}.${key} is not plain JSON data`)
             }
-            if (encoded === canonical(def.owned[key])) delete patch[key]
+            if (Object.hasOwn(baseline, key) && encoded === baseline[key]) delete patch[key]
             else patch[key] = value
           }
           if (Object.keys(patch).length === 0) {

@@ -714,6 +714,97 @@ test('a targetless action cannot touch pre-existing state — the missing gate i
   assert.equal(rt.get('Task', 'T9', asTest), undefined)
 })
 
+test('targetless identity is (type, pk) pairs — joined-string collisions do not fool the scope', () => {
+  // A model whose names embed the would-be delimiter: type "A/B" with pk "C"
+  // must never satisfy a check for type "A" with pk "B/C".
+  const tricky = defineOntology({
+    name: 'tricky',
+    objects: {
+      A: defineObject({ primaryKey: 'id', properties: { id: z.string(), label: z.string().nullable() }, owned: true }),
+      'A/B': defineObject({ primaryKey: 'id', properties: { id: z.string() }, owned: true }),
+    },
+    links: {},
+    actions: {
+      collide: defineAction({
+        params: { _: z.string() },
+        preconditions: [],
+        effects: () => [
+          create('A/B', 'C', { id: 'C' }),
+          modify('A', 'B/C', { label: 'gotcha' }), // pre-existing A/"B/C" — must be out of scope
+        ],
+      }),
+      seedA: defineAction({
+        params: { id: z.string() },
+        preconditions: [],
+        effects: ({ params }) => [create('A', params.id as string, { id: params.id, label: null })],
+      }),
+    },
+  })
+  const rt = createRuntime(tricky, new Database(':memory:'))
+  assert.equal(rt.execute('seedA', { id: 'B/C' }, { actor: 'test' }).ok, true)
+  const result = rt.execute('collide', { _: 'x' }, { actor: 'test' })
+  assert.equal(result.ok, false)
+  if (!result.ok) assert.equal(result.error.code, 'TARGETLESS_SCOPE')
+  assert.equal(rt.get<{ label: string | null }>('A', 'B/C', { actor: 'test' })!.label, null)
+})
+
+test('an adapter that opens a transaction on the store is rolled back and refused', () => {
+  const db = new Database(':memory:')
+  const intruder: WritebackAdapter = {
+    name: 'intruder',
+    apply: () => {
+      db.exec('BEGIN')
+    },
+  }
+  const rt = createRuntime(ontology, db, { writeback: intruder })
+  rt.load(SNAPSHOT)
+  assert.throws(
+    () => rt.execute('cancelOrder', { orderId: 'O2', reason: 'x' }, { actor: 'test' }),
+    /transaction open/,
+  )
+  assert.equal(db.inTransaction, false) // the intrusion was rolled back
+  assert.equal(rt.get<{ status: string }>('Order', 'O2', asTest)!.status, 'pending')
+  assert.equal(rt.auditLog({ status: 'rejected' })[0]?.error?.code, 'FOREIGN_TRANSACTION')
+  assert.equal(rt.auditLog({ status: 'applied' }).length, 0)
+})
+
+test('owned values live in plain JSON: class instances and one-way transforms are refused at definition', () => {
+  // A Date is not plain JSON — it would come back from the store as
+  // something else entirely.
+  assert.throws(
+    () =>
+      defineObject({
+        primaryKey: 'id',
+        properties: { id: z.string(), at: z.date() },
+        owned: { at: new Date(0) },
+      }),
+    /plain JSON/,
+  )
+  // A schema that does not accept its own output cannot guard a stored value.
+  assert.throws(
+    () =>
+      defineObject({
+        primaryKey: 'id',
+        properties: { id: z.string(), size: z.string().transform((s) => s.length) },
+        owned: { size: 'abc' },
+      }),
+    /accept its own output/,
+  )
+})
+
+test('empty names are not identifiers', () => {
+  assert.throws(
+    () =>
+      defineOntology({
+        name: 'bad',
+        objects: { '': defineObject({ primaryKey: 'id', properties: { id: z.string() } }) },
+        links: {},
+        actions: {},
+      }),
+    /not a valid object type name/,
+  )
+})
+
 test('a source-backed delete cannot smuggle away ontology-owned edits', () => {
   const rt = setup()
   rt.execute('setAssignee', { orderId: 'O2', assignee: 'alice' }, { actor: 'test' })
