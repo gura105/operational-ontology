@@ -5,9 +5,10 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import Database from 'better-sqlite3'
+import { z } from 'zod'
 import { Client } from '@modelcontextprotocol/sdk/client/index.js'
 import { InMemoryTransport } from '@modelcontextprotocol/sdk/inMemory.js'
-import { createRuntime, type Runtime } from '../src/core.js'
+import { createRuntime, defineObject, defineOntology, type Runtime } from '../src/core.js'
 import { buildMcpServer } from '../src/mcp.js'
 import { createFixtures } from './helpers/tmp-fixtures.js'
 import { integrate } from '../examples/orders/integrate.js'
@@ -108,6 +109,38 @@ test('aggregate rejects property names the model does not define', async () => {
   const { client } = await connectedClient()
   const result = await client.callTool({ name: 'aggregate_order', arguments: { group_by: 'nonexistent' } })
   assert.equal(result.isError, true)
+})
+
+test('wrapped numeric properties (nullable/optional) are still summable', async () => {
+  const mini = defineOntology({
+    name: 'mini',
+    objects: {
+      Thing: defineObject({
+        primaryKey: 'id',
+        properties: { id: z.string(), label: z.string(), score: z.number().nullable() },
+      }),
+    },
+    links: {},
+    actions: {},
+  })
+  const rt = createRuntime(mini, new Database(':memory:'))
+  rt.load({ objects: { Thing: [
+    { id: 'T1', label: 'a', score: 5 },
+    { id: 'T2', label: 'a', score: null },
+  ] } })
+  const server = buildMcpServer(rt)
+  const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair()
+  const client = new Client({ name: 'mini-client', version: '0.0.0' })
+  await Promise.all([server.connect(serverTransport), client.connect(clientTransport)])
+
+  const result = await client.callTool({
+    name: 'aggregate_thing',
+    arguments: { group_by: 'label', sum: 'score' },
+  })
+  assert.notEqual(result.isError, true)
+  const groups = JSON.parse((result.content as any)[0].text)
+  assert.equal(groups.a.count, 2)
+  assert.equal(groups.a.sum, 5) // null coalesces to 0
 })
 
 test('an allowed agent write lands, is audited, and reaches the system of record', async () => {

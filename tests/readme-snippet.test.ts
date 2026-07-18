@@ -31,5 +31,8 @@ for (const file of ['README.md', 'README.ja.md']) {
     const ontology = build(z, defineOntology, defineObject, defineLink, defineAction, reject, modify)
     assert.equal(ontology.name, 'orders')
     assert.ok('cancelOrder' in ontology.actions)
+    // Money stays in integer minor units — a float regression must fail here.
+    const total = (ontology.objects.Order.properties as Record<string, z.ZodType>).total
+    assert.equal(total.safeParse(0.5).success, false, 'money must be integer minor units')
   })
 }

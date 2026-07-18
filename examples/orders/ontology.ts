@@ -107,7 +107,8 @@ export const orders = defineOntology({
      * A purely ontology-owned decision: neither legacy system has an assignee
      * column, so the ontology's own store is the system of record for it.
      * Note what this action does NOT touch — `status` is source-backed, and
-     * assignment has no business changing it.
+     * assignment has no business changing it. Reassignment overwrites the
+     * previous assignee; every attempt, either way, is on the audit log.
      */
     assignOrder: defineAction({
       description: 'Assign a pending order to a person for fulfilment.',

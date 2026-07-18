@@ -26,6 +26,36 @@ export function buildMcpServer(rt: Runtime, opts: { agent?: string } = {}): McpS
   const asJson = (value: unknown) => ({
     content: [{ type: 'text' as const, text: JSON.stringify(value, null, 2) }],
   })
+  // Every handler — reads included — surfaces crashes in the same
+  // machine-readable shape as refusals. No stack dumps in an agent's context.
+  const guarded =
+    <A extends unknown[], R>(fn: (...args: A) => Promise<R>) =>
+    async (...args: A): Promise<R | (ReturnType<typeof asJson> & { isError: true })> => {
+      try {
+        return await fn(...args)
+      } catch (e) {
+        return {
+          ...asJson({ error: { code: 'INTERNAL', message: e instanceof Error ? e.message : String(e) } }),
+          isError: true as const,
+        }
+      }
+    }
+  // A wrapped numeric (optional / nullable / defaulted) is still numeric.
+  const innerType = (schema: z.ZodType): z.ZodType => {
+    let s: unknown = schema
+    for (;;) {
+      const candidate = s as { unwrap?: () => unknown; def?: { innerType?: unknown } }
+      if (typeof candidate.unwrap === 'function') {
+        s = candidate.unwrap()
+        continue
+      }
+      if (candidate.def?.innerType) {
+        s = candidate.def.innerType
+        continue
+      }
+      return s as z.ZodType
+    }
+  }
 
   for (const [typeName, def] of Object.entries(rt.ontology.objects)) {
     const filterShape = Object.fromEntries(
@@ -40,8 +70,8 @@ export function buildMcpServer(rt: Runtime, opts: { agent?: string } = {}): McpS
           'Results are scoped by the model-attached visibility policy for this session.',
         inputSchema: filterShape,
       },
-      async (filter: Record<string, unknown>, extra: { sessionId?: string }) =>
-        asJson(rt.search(typeName, { actor: actorOf(extra), filter: prune(filter) })),
+      guarded(async (filter: Record<string, unknown>, extra: { sessionId?: string }) =>
+        asJson(rt.search(typeName, { actor: actorOf(extra), filter: prune(filter) }))),
     )
     server.registerTool(
       `get_${snake(typeName)}`,
@@ -49,14 +79,14 @@ export function buildMcpServer(rt: Runtime, opts: { agent?: string } = {}): McpS
         description: `Fetch a single ${typeName} by primary key (${def.primaryKey}).`,
         inputSchema: { [def.primaryKey]: z.string() },
       },
-      async (args: Record<string, unknown>, extra: { sessionId?: string }) =>
-        asJson(rt.get(typeName, String(args[def.primaryKey]), { actor: actorOf(extra) }) ?? null),
+      guarded(async (args: Record<string, unknown>, extra: { sessionId?: string }) =>
+        asJson(rt.get(typeName, String(args[def.primaryKey]), { actor: actorOf(extra) }) ?? null)),
     )
     // Aggregate inputs are model-derived too: property names come from the
     // definition, and only numeric properties are summable.
     const propertyKeys = Object.keys(def.properties) as [string, ...string[]]
     const numericKeys = Object.entries(def.properties)
-      .filter(([, schema]) => schema instanceof z.ZodNumber)
+      .filter(([, schema]) => innerType(schema as z.ZodType) instanceof z.ZodNumber)
       .map(([key]) => key)
     const aggregateShape: Record<string, z.ZodType> = {
       group_by: z.enum(propertyKeys),
@@ -71,7 +101,7 @@ export function buildMcpServer(rt: Runtime, opts: { agent?: string } = {}): McpS
           'a numeric property. Query-time aggregation — nothing is precomputed.',
         inputSchema: aggregateShape,
       },
-      async (rawArgs: Record<string, unknown>, extra: { sessionId?: string }) => {
+      guarded(async (rawArgs: Record<string, unknown>, extra: { sessionId?: string }) => {
         const args = rawArgs as { group_by: string; sum?: string; filter?: Record<string, unknown> }
         return asJson(
           rt.aggregate(typeName, {
@@ -81,7 +111,7 @@ export function buildMcpServer(rt: Runtime, opts: { agent?: string } = {}): McpS
             ...(args.sum ? { sum: (o: Record<string, unknown>) => Number(o[args.sum!] ?? 0) } : {}),
           }),
         )
-      },
+      }),
     )
   }
 
@@ -98,8 +128,8 @@ export function buildMcpServer(rt: Runtime, opts: { agent?: string } = {}): McpS
           direction: z.enum(['forward', 'reverse']).default('forward'),
         },
       },
-      async (args: { pk: string; direction: 'forward' | 'reverse' }, extra: { sessionId?: string }) =>
-        asJson(rt.traverse(linkName, args.pk, { actor: actorOf(extra), direction: args.direction })),
+      guarded(async (args: { pk: string; direction: 'forward' | 'reverse' }, extra: { sessionId?: string }) =>
+        asJson(rt.traverse(linkName, args.pk, { actor: actorOf(extra), direction: args.direction }))),
     )
   }
 
@@ -113,22 +143,13 @@ export function buildMcpServer(rt: Runtime, opts: { agent?: string } = {}): McpS
           'machine-readable ({ code, message }) and the attempt is recorded in the audit log.',
         inputSchema: action.params,
       },
-      async (params: Record<string, unknown>, extra: { sessionId?: string }) => {
-        try {
-          const result = rt.execute(actionName, params, { actor: actorOf(extra) })
-          if (!result.ok) {
-            return { ...asJson({ error: result.error }), isError: true }
-          }
-          return asJson({ applied: result.edits })
-        } catch (e) {
-          // Crashes surface in the same machine-readable shape as refusals —
-          // no internal stack dumps in an agent's context window.
-          return {
-            ...asJson({ error: { code: 'INTERNAL', message: e instanceof Error ? e.message : String(e) } }),
-            isError: true,
-          }
+      guarded(async (params: Record<string, unknown>, extra: { sessionId?: string }) => {
+        const result = rt.execute(actionName, params, { actor: actorOf(extra) })
+        if (!result.ok) {
+          return { ...asJson({ error: result.error }), isError: true }
         }
-      },
+        return asJson({ applied: result.edits })
+      }),
     )
   }
 
@@ -144,7 +165,8 @@ export function buildMcpServer(rt: Runtime, opts: { agent?: string } = {}): McpS
         target: z.string().optional(),
       },
     },
-    async (filter) => asJson(rt.auditLog(prune(filter))),
+    guarded(async (filter: Record<string, unknown>) =>
+      asJson(rt.auditLog(prune(filter) as Parameters<typeof rt.auditLog>[0]))),
   )
 
   return server

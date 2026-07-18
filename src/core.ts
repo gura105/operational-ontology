@@ -128,7 +128,12 @@ export interface ActionDef<S extends Properties = Properties> {
    * act; preconditions decide *whether the operation is valid at all*.
    */
   preconditions: Array<(ctx: ActionCtx<any, any>) => Violation | void>
-  /** The changes this action makes, described as data. */
+  /**
+   * The changes this action makes, described as data. Effects must be pure:
+   * they describe edits, they do not perform them. Reaching into external
+   * systems from here bypasses write-back ordering and the audit log — side
+   * effects belong to the WritebackAdapter.
+   */
   effects: (ctx: ActionCtx<any, any>) => Edit[]
   /**
    * Route this action's edits through the write-back adapter before they are
@@ -383,28 +388,35 @@ export class Runtime {
     const target = `${action.object}/${pk}`
     const refuse = (error: Violation): ActionResult => refuseAs(target, parsed.data, error)
 
-    // Rule evaluation is guarded: a crashing visibility predicate,
-    // precondition, or effect is audited as RULE_CRASHED before the error
-    // surfaces — crashes are attempts too.
-    const crashed = (e: unknown): never => {
+    // Crashes are attempts too, and they are audited with a code that says
+    // where they happened: READ_FAILED for storage faults, RULE_CRASHED for
+    // model code (visibility, preconditions, effects) that threw.
+    const crashedAs = (code: string, e: unknown): never => {
       this.#audit({
         actor: opts.actor,
         action: actionName,
         target,
         params: parsed.data,
         status: 'rejected',
-        error: reject('RULE_CRASHED', e instanceof Error ? e.message : String(e)),
+        error: reject(code, e instanceof Error ? e.message : String(e)),
       })
       throw e
     }
 
     let object: Record<string, unknown> | undefined
     try {
-      // Visibility gates action targets too: an object the actor cannot see is
-      // TARGET_NOT_FOUND — same error as a missing one, so existence never leaks.
-      object = this.get(action.object, pk, { actor: opts.actor })
+      object = this.#fetch(action.object, pk)
     } catch (e) {
-      crashed(e)
+      crashedAs('READ_FAILED', e)
+    }
+    if (object !== undefined) {
+      try {
+        // Visibility gates action targets too: an object the actor cannot see
+        // is TARGET_NOT_FOUND — same as a missing one, so existence never leaks.
+        if (!this.#visible(action.object, object, opts.actor)) object = undefined
+      } catch (e) {
+        crashedAs('RULE_CRASHED', e)
+      }
     }
     if (!object) return refuse(reject('TARGET_NOT_FOUND', `${target} does not exist`))
 
@@ -418,7 +430,16 @@ export class Runtime {
       }
       edits = action.effects(ctx)
     } catch (e) {
-      crashed(e)
+      crashedAs('RULE_CRASHED', e)
+    }
+
+    // Statically invalid edits are refused before anything leaves this
+    // process — the write-back adapter never sees an edit plan the model can
+    // already prove wrong. DB-dependent checks stay at commit time.
+    try {
+      this.#validateEdits(edits)
+    } catch (e) {
+      return refuse(reject('INVALID_EDITS', e instanceof Error ? e.message : String(e)))
     }
 
     if (action.writeback) {
@@ -492,6 +513,35 @@ export class Runtime {
     const def = this.ontology.objects[type]
     if (!def) throw new Error(`unknown object type "${type}"`)
     return def
+  }
+
+  /**
+   * Model-only validation of an edit plan — everything provable without
+   * reading current state. Runs before write-back; DB-dependent checks
+   * (merged-object schemas, link endpoints, cardinality) run at commit.
+   */
+  #validateEdits(edits: Edit[]): void {
+    for (const edit of edits) {
+      if (edit.op === 'link' || edit.op === 'unlink') {
+        if (!(edit.link in this.ontology.links)) throw new Error(`unknown link type "${edit.link}"`)
+        continue
+      }
+      const def = this.#objectDef(edit.object)
+      const schema = this.#schemas.get(edit.object)!
+      if (edit.op === 'create') {
+        const data = schema.parse(edit.data)
+        if (String(data[def.primaryKey]) !== edit.pk) {
+          throw new Error(
+            `create pk mismatch for ${edit.object}: edit says "${edit.pk}", data says "${String(data[def.primaryKey])}"`,
+          )
+        }
+      } else if (edit.op === 'modify') {
+        if (def.primaryKey in edit.changes && edit.changes[def.primaryKey] !== edit.pk) {
+          throw new Error(`cannot modify the primary key of ${edit.object}/${edit.pk}`)
+        }
+        schema.partial().parse(edit.changes)
+      }
+    }
   }
 
   /** Raw fetch without visibility — for internal integrity checks only. */

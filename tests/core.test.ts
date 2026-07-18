@@ -1,5 +1,5 @@
 /**
- * The specification, as executable tests. The first test is the reason this
+ * The behavior, as executable tests. The first test is the reason this
  * repository exists: a business rule refusing a write with a machine-readable
  * error.
  */
@@ -255,13 +255,16 @@ test('write-back-first ordering: adapter failure blocks the ontology edit', () =
   assert.equal(rt.auditLog({ status: 'applied' }).length, 0)
 })
 
-test('a failing commit rolls back completely (no partial edits, no orphan applied rows)', () => {
-  const rt = setup()
-  assert.throws(() => rt.execute('corruptOrder', { orderId: 'O2' }, { actor: 'test' }))
+test('statically invalid edits are refused before the adapter ever runs', () => {
+  const calls: string[] = []
+  const spy: WritebackAdapter = { name: 'spy', apply: () => calls.push('adapter') && undefined }
+  const rt = setup(spy)
+  const result = rt.execute('corruptOrder', { orderId: 'O2' }, { actor: 'test' })
+  assert.equal(result.ok, false)
+  if (!result.ok) assert.equal(result.error.code, 'INVALID_EDITS')
+  assert.deepEqual(calls, []) // the write-back adapter never saw the bad plan
   assert.equal(rt.get<{ status: string }>('Order', 'O2', asTest)!.status, 'pending')
-  assert.equal(rt.auditLog({ status: 'applied' }).length, 0)
-  // The crashed attempt itself is still on the record.
-  assert.equal(rt.auditLog({ status: 'rejected' })[0]?.error?.code, 'COMMIT_FAILED')
+  assert.equal(rt.auditLog({ status: 'rejected' })[0]?.error?.code, 'INVALID_EDITS')
 })
 
 test('actions can rewire the graph itself — links are edits too', () => {
@@ -273,13 +276,18 @@ test('actions can rewire the graph itself — links are edits too', () => {
   assert.equal(rt.get<{ customerId: string }>('Order', 'O2', asTest)!.customerId, 'C2')
 })
 
-test('linking to a missing object rolls back the whole action', () => {
+test('a failing commit rolls back completely and is audited with its edits', () => {
   const rt = setup()
   assert.throws(() => rt.execute('reassignOrder', { orderId: 'O2', toCustomerId: 'GHOST' }, { actor: 'test' }))
   // The unlink that ran before the failing link is rolled back too.
   assert.deepEqual(rt.traverse<{ id: string }>('customerOrders', 'C1', asTest).map((o) => o.id), ['O1', 'O2'])
   assert.equal(rt.get<{ customerId: string }>('Order', 'O2', asTest)!.customerId, 'C1')
   assert.equal(rt.auditLog({ status: 'applied' }).length, 0)
+  // The crashed attempt is on the record — with the edit plan that already
+  // left for the source, the raw material for reconciliation.
+  const rejected = rt.auditLog({ status: 'rejected' })[0]
+  assert.equal(rejected?.error?.code, 'COMMIT_FAILED')
+  assert.ok(rejected?.edits && rejected.edits.length > 0)
 })
 
 test('one-to-many cardinality is enforced at the write gate', () => {
@@ -313,9 +321,11 @@ test('crashing rules are audited too — RULE_CRASHED, then the error surfaces',
   assert.deepEqual(rejected.map((e) => e.error?.code), ['RULE_CRASHED', 'RULE_CRASHED'])
 })
 
-test('create refuses a pk that disagrees with the data', () => {
+test('create refuses a pk that disagrees with the data — before write-back', () => {
   const rt = setup()
-  assert.throws(() => rt.execute('conjureOrder', { orderId: 'O2' }, { actor: 'test' }), /pk mismatch/)
+  const result = rt.execute('conjureOrder', { orderId: 'O2' }, { actor: 'test' })
+  assert.equal(result.ok, false)
+  if (!result.ok) assert.equal(result.error.code, 'INVALID_EDITS')
   assert.equal(rt.get('Order', 'ACTUAL', asTest), undefined)
 })
 
@@ -329,7 +339,12 @@ test('delete is RESTRICT: a linked object refuses to die — unlink first', () =
 
 test('the primary key cannot be modified', () => {
   const rt = setup()
-  assert.throws(() => rt.execute('mangleId', { orderId: 'O2' }, { actor: 'test' }), /primary key/)
+  const result = rt.execute('mangleId', { orderId: 'O2' }, { actor: 'test' })
+  assert.equal(result.ok, false)
+  if (!result.ok) {
+    assert.equal(result.error.code, 'INVALID_EDITS')
+    assert.match(result.error.message, /primary key/)
+  }
   assert.notEqual(rt.get('Order', 'O2', asTest), undefined)
 })
 
@@ -393,6 +408,13 @@ const visOntology = defineOntology({
       primaryKey: 'id',
       properties: { id: z.string(), docId: z.string(), text: z.string() },
     }),
+    Trap: defineObject({
+      primaryKey: 'id',
+      properties: { id: z.string() },
+      visibility: () => {
+        throw new Error('visibility crashed')
+      },
+    }),
   },
   links: {
     docComments: defineLink({ from: 'Doc', to: 'Comment', kind: 'one-to-many' }),
@@ -404,6 +426,13 @@ const visOntology = defineOntology({
       params: { docId: z.string(), title: z.string().min(1) },
       preconditions: [],
       effects: ({ object, params }) => [modify('Doc', object.id as string, { title: params.title })],
+    }),
+    springTrap: defineAction({
+      object: 'Trap',
+      targetParam: 'trapId',
+      params: { trapId: z.string() },
+      preconditions: [],
+      effects: () => [],
     }),
   },
 })
@@ -417,6 +446,7 @@ function visSetup() {
         { id: 'D2', owner: 'user:bob', title: 'beta' },
       ],
       Comment: [{ id: 'CM1', docId: 'D2', text: 'looks good' }],
+      Trap: [{ id: 'T1' }],
     },
     links: { docComments: [['D2', 'CM1']] },
   })
@@ -427,6 +457,25 @@ test('visibility lives in the model: the same search returns different worlds', 
   const rt = visSetup()
   assert.deepEqual(rt.search<{ id: string }>('Doc', { actor: 'user:alice' }).map((d) => d.id), ['D1'])
   assert.deepEqual(rt.search<{ id: string }>('Doc', { actor: 'user:auditor' }).map((d) => d.id), ['D1', 'D2'])
+})
+
+test('a crashing visibility predicate is audited as RULE_CRASHED', () => {
+  const rt = visSetup()
+  assert.throws(() => rt.execute('springTrap', { trapId: 'T1' }, { actor: 'user:alice' }), /visibility crashed/)
+  assert.equal(rt.auditLog({ status: 'rejected' })[0]?.error?.code, 'RULE_CRASHED')
+})
+
+test('a partial re-load that breaks surviving edits is refused whole', () => {
+  const rt = setup()
+  rt.execute('reassignOrder', { orderId: 'O2', toCustomerId: 'C2' }, { actor: 'test' })
+  // Re-load Customers without C2 — the surviving edited link would dangle.
+  assert.throws(() => rt.load({ objects: { Customer: [{ id: 'C1', name: 'Yamada' }] } }), /does not exist/)
+  // Rolled back whole: C2 and the edited link both survive.
+  assert.notEqual(rt.get('Customer', 'C2', asTest), undefined)
+  assert.deepEqual(
+    rt.traverse<{ id: string }>('customerOrders', 'O2', { ...asTest, direction: 'reverse' }).map((c) => c.id),
+    ['C2'],
+  )
 })
 
 test('a hidden origin leaks nothing through traversal', () => {

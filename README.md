@@ -177,7 +177,7 @@ Within its own store, the runtime is honestly transactional: an action's edits a
 
 ## Non-goals
 
-Scope is frozen by design. This is a reference implementation — the companion code to a definition — and it stays readable by refusing to grow:
+Scope is frozen for v0 by design. This is a reference implementation — the companion code to a definition — and it stays readable by refusing to grow:
 
 - **No UI builder.** Applications are consumers of the ontology, not part of it.
 - **No pipeline framework.** Integration is a prerequisite; the demo uses plain SQL.
@@ -185,7 +185,7 @@ Scope is frozen by design. This is a reference implementation — the companion 
 - **One ontology = one bounded context.** Federation — who owns the model when there are several — is real and unaddressed in v0, like schema evolution.
 - **No link properties or composite keys (yet).** The demo's order-line quantities deliberately stay in the data layer; whether they become a first-class `OrderLine` or properties on the link is a v0.2 decision.
 - **No OWL/RDF.** Academic ontologies are semantic-only — no actions, no kinetics. Different tool for a different job.
-- **No general authorization system.** The pattern-level part is here — identity flows through every call, and visibility attaches to the model. The mechanism (groups, attributes, policy languages, cell-level security, propagation) is a policy engine's job.
+- **No general authorization system.** The pattern-level part is here — identity flows through every call (the audit log's administrative view is the declared exception), and visibility attaches to the model. The mechanism (groups, attributes, policy languages, cell-level security, propagation) is a policy engine's job.
 - **No npm package.** Fork it; don't depend on it.
 - **Not a Foundry alternative.** Foundry is one implementation of this pattern, vertically integrated across all three layers. This repo names and demonstrates the middle layer.
 
@@ -218,7 +218,7 @@ Agents recover differently from each, which is why this implementation keeps the
 
 Two declared design choices follow. First, the slots: `preconditions` is a required key where an empty list is a stated decision, because gated writes are pattern core; `visibility` is an optional key, because authorization's *existence* is implementation-defined. Second, the polarity — defaults must be declared, like failure semantics: this implementation is **fail-open** (no `visibility` means visible to everyone). A reference implementation without authentication cannot be meaningfully fail-closed; pretending otherwise would be security theater. Foundry's baseline is the opposite — discretionary grants expand access from zero, and mandatory markings deny conjunctively on top. A fail-closed deployment starts — but does not end — with flipping the `visibility` slot from optional to required: it also needs real authentication, action permissions, and scoped audit access underneath. One more declared surface here: the audit log read API is unscoped — an administrative view where visibility filtering does not apply, fail-open like the rest.
 
-**What about Foundry's Functions and derived properties?** Foundry counts three kinetic elements: actions, functions, dynamic security. Function-*backed* actions are already inside this pattern — preconditions and effects are arbitrary code, which is the same split (structure as data, rules as functions). Read-time computation — derived properties, query functions — is deliberately outside: the pattern's distinguishing half is governed *writes*, not computed *reads*. Dynamic security is the permissions story above.
+**What about Foundry's Functions and derived properties?** Foundry counts three kinetic elements: actions, functions, dynamic security. Function-*backed* actions are already inside this pattern — preconditions and effects are ordinary code that *describes* changes: effects return an edit plan and perform nothing themselves, side effects belong to the adapter. The same split (structure as data, rules as functions). Read-time computation — derived properties, query functions — is deliberately outside: the pattern's distinguishing half is governed *writes*, not computed *reads*. Dynamic security is the permissions story above.
 
 **What if an agent retries?** Idempotency is implementation-defined — and worth declaring, because agents do retry. This implementation has no idempotency keys: a retried `cancelOrder` is refused by its own precondition (`ORDER_ALREADY_CANCELLED`) — natural idempotency by way of the rules, not a guarantee — and a retry that interleaves with write-back can double-apply the side effect at the source. If your actions are not naturally idempotent, an invocation id in the params — audited like everything else — is the minimal starting point: it buys you correlation; actual deduplication needs a uniqueness check on that id.
 
@@ -228,6 +228,6 @@ Two declared design choices follow. First, the slots: `preconditions` is a requi
 
 ## Status
 
-v0.1 — reference implementation. Scope is frozen for v0; the declared v0 simplifications — edit survival across re-indexing, link properties, typed rule contexts — are the v0.2 worklist. Built and verified with Node 24, better-sqlite3, zod 4, MCP SDK 1.29.
+v0.1 — reference implementation. Scope is frozen for v0; the declared v0 simplifications — edit survival across re-indexing, link properties and composite keys, typed rule contexts — are the v0.2 worklist. Built and verified with Node 24, better-sqlite3, zod 4, MCP SDK 1.29.
 
 MIT © gura105
