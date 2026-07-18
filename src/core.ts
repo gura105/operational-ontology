@@ -45,7 +45,7 @@ export interface ObjectTypeDef<S extends Properties = Properties> {
 }
 
 export function defineObject<S extends Properties>(def: ObjectTypeDef<S>): ObjectTypeDef<S> {
-  if (!(def.primaryKey in def.properties)) {
+  if (!Object.hasOwn(def.properties, def.primaryKey)) {
     throw new Error(`primaryKey "${def.primaryKey}" is not one of the defined properties`)
   }
   return def
@@ -143,7 +143,7 @@ export interface ActionDef<S extends Properties = Properties> {
 }
 
 export function defineAction<S extends Properties>(def: ActionDef<S>): ActionDef<S> {
-  if (!(def.targetParam in def.params)) {
+  if (!Object.hasOwn(def.params, def.targetParam)) {
     throw new Error(`targetParam "${def.targetParam}" is not one of the action's params`)
   }
   return def
@@ -159,13 +159,13 @@ export interface OntologyDef {
 export function defineOntology(def: OntologyDef): OntologyDef {
   for (const [name, link] of Object.entries(def.links)) {
     for (const end of [link.from, link.to]) {
-      if (!(end in def.objects)) {
+      if (!Object.hasOwn(def.objects, end)) {
         throw new Error(`link "${name}" references unknown object type "${end}"`)
       }
     }
   }
   for (const [name, action] of Object.entries(def.actions)) {
-    if (!(action.object in def.objects)) {
+    if (!Object.hasOwn(def.objects, action.object)) {
       throw new Error(`action "${name}" references unknown object type "${action.object}"`)
     }
   }
@@ -285,7 +285,7 @@ export class Runtime {
         }
       }
       for (const [name, pairs] of Object.entries(snapshot.links ?? {})) {
-        if (!(name in this.ontology.links)) throw new Error(`unknown link type "${name}"`)
+        if (!Object.hasOwn(this.ontology.links, name)) throw new Error(`unknown link type "${name}"`)
         this.#db.prepare('DELETE FROM links WHERE name = ?').run(name)
         for (const [from, to] of pairs) insertLink.run(name, from, to)
       }
@@ -530,7 +530,7 @@ export class Runtime {
   #validateEdits(edits: Edit[]): void {
     for (const edit of edits) {
       if (edit.op === 'link' || edit.op === 'unlink') {
-        if (!(edit.link in this.ontology.links)) throw new Error(`unknown link type "${edit.link}"`)
+        if (!Object.hasOwn(this.ontology.links, edit.link)) throw new Error(`unknown link type "${edit.link}"`)
         continue
       }
       const def = this.#objectDef(edit.object)
@@ -540,7 +540,9 @@ export class Runtime {
         // would still travel to the write-back adapter in the raw edit and
         // let source and store diverge without a trace.
         const payload = edit.op === 'create' ? edit.data : edit.changes
-        const unknown = Object.keys(payload).filter((key) => !(key in def.properties))
+        // Object.hasOwn, not `in`: prototype names (toString, __proto__, …) must
+        // not masquerade as model properties.
+        const unknown = Object.keys(payload).filter((key) => !Object.hasOwn(def.properties, key))
         if (unknown.length > 0) {
           throw new Error(`unknown propert${unknown.length > 1 ? 'ies' : 'y'} "${unknown.join('", "')}" on ${edit.object}`)
         }
@@ -553,7 +555,7 @@ export class Runtime {
           )
         }
       } else if (edit.op === 'modify') {
-        if (def.primaryKey in edit.changes && edit.changes[def.primaryKey] !== edit.pk) {
+        if (Object.hasOwn(edit.changes, def.primaryKey) && edit.changes[def.primaryKey] !== edit.pk) {
           throw new Error(`cannot modify the primary key of ${edit.object}/${edit.pk}`)
         }
         schema.partial().parse(edit.changes)
@@ -609,7 +611,7 @@ export class Runtime {
       const def = this.#objectDef(edit.object)
       const schema = this.#schemas.get(edit.object)!
       if (edit.op === 'modify') {
-        if (def.primaryKey in edit.changes && edit.changes[def.primaryKey] !== edit.pk) {
+        if (Object.hasOwn(edit.changes, def.primaryKey) && edit.changes[def.primaryKey] !== edit.pk) {
           throw new Error(`cannot modify the primary key of ${edit.object}/${edit.pk}`)
         }
         const current = this.#fetch(edit.object, edit.pk)

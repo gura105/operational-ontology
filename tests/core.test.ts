@@ -112,6 +112,15 @@ const ontology = defineOntology({
       ],
       writeback: true,
     }),
+    protoOrder: defineAction({
+      // Prototype-chain names must not masquerade as model properties.
+      object: 'Order',
+      targetParam: 'orderId',
+      params: { orderId: z.string() },
+      preconditions: [],
+      effects: ({ object }) => [modify('Order', object.id as string, { toString: 'gotcha' })],
+      writeback: true,
+    }),
     purgeOrder: defineAction({
       // Deletes without unlinking — the RESTRICT rule must catch it.
       object: 'Order',
@@ -296,9 +305,17 @@ test('statically invalid edits are refused before the adapter ever runs', () => 
   assert.equal(noise.ok, false)
   if (!noise.ok) assert.match(noise.error.message, /ghost/)
 
+  // Prototype-chain names (toString, __proto__, …) are unknown keys too.
+  const proto = rt.execute('protoOrder', { orderId: 'O2' }, { actor: 'test' })
+  assert.equal(proto.ok, false)
+  if (!proto.ok) {
+    assert.equal(proto.error.code, 'INVALID_EDITS')
+    assert.match(proto.error.message, /toString/)
+  }
+
   assert.deepEqual(calls, []) // the write-back adapter never saw a bad plan
   assert.equal(rt.get<{ status: string }>('Order', 'O2', asTest)!.status, 'pending')
-  assert.equal(rt.auditLog({ status: 'rejected' }).length, 3)
+  assert.equal(rt.auditLog({ status: 'rejected' }).length, 4)
 })
 
 test('a storage fault is audited as READ_FAILED', () => {
