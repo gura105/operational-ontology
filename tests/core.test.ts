@@ -229,6 +229,29 @@ const ontology = defineOntology({
       ],
       writeback: true,
     }),
+    hollowModify: defineAction({
+      // A modify that changes nothing — not an edit, refused.
+      object: 'Order',
+      targetParam: 'orderId',
+      params: { orderId: z.string() },
+      preconditions: [],
+      effects: ({ object }) => [modify('Order', object.id as string, {})],
+    }),
+    sneakyTargetless: defineAction({
+      // Targetless, but the plan touches a pre-existing object.
+      params: { orderId: z.string() },
+      preconditions: [],
+      effects: ({ params }) => [modify('Order', params.orderId as string, { assignee: 'ghost' })],
+    }),
+    graftTask: defineAction({
+      // Targetless create wired to a pre-existing endpoint.
+      params: { taskId: z.string(), orderId: z.string() },
+      preconditions: [],
+      effects: ({ params }) => [
+        create('Task', params.taskId as string, { id: params.taskId, title: 'grafted' }),
+        link('orderTasks', params.orderId as string, params.taskId as string),
+      ],
+    }),
     idleWriteback: defineAction({
       // Declares write-back but produces an empty plan — nothing to route.
       object: 'Order',
@@ -676,6 +699,133 @@ test('a targetless action still validates params and its edit plan', () => {
   const dup = rt.execute('openTask', { taskId: 'T1', title: 'b' }, { actor: 'test' })
   assert.equal(dup.ok, false)
   if (!dup.ok) assert.equal(dup.error.code, 'INVALID_EDITS')
+})
+
+test('a targetless action cannot touch pre-existing state — the missing gate is not a probe', () => {
+  const rt = setup()
+  const sneak = rt.execute('sneakyTargetless', { orderId: 'O2' }, { actor: 'test' })
+  assert.equal(sneak.ok, false)
+  if (!sneak.ok) assert.equal(sneak.error.code, 'TARGETLESS_SCOPE')
+  assert.equal(rt.get<{ assignee: string | null }>('Order', 'O2', asTest)!.assignee, null)
+  // Even a legitimate create cannot wire itself to something that already exists.
+  const graft = rt.execute('graftTask', { taskId: 'T9', orderId: 'O2' }, { actor: 'test' })
+  assert.equal(graft.ok, false)
+  if (!graft.ok) assert.equal(graft.error.code, 'TARGETLESS_SCOPE')
+  assert.equal(rt.get('Task', 'T9', asTest), undefined)
+})
+
+test('a source-backed delete cannot smuggle away ontology-owned edits', () => {
+  const rt = setup()
+  rt.execute('setAssignee', { orderId: 'O2', assignee: 'alice' }, { actor: 'test' })
+  const blocked = rt.execute('scrapOrder', { orderId: 'O2' }, { actor: 'test' })
+  assert.equal(blocked.ok, false)
+  if (!blocked.ok) {
+    assert.equal(blocked.error.code, 'INVALID_EDITS')
+    assert.match(blocked.error.message, /clear them first/)
+  }
+  // Clearing the edit is an action too — then the delete goes through.
+  rt.execute('setAssignee', { orderId: 'O2', assignee: null }, { actor: 'test' })
+  assert.equal(rt.execute('scrapOrder', { orderId: 'O2' }, { actor: 'test' }).ok, true)
+})
+
+test('an empty modify is not an edit', () => {
+  const rt = setup()
+  const result = rt.execute('hollowModify', { orderId: 'O2' }, { actor: 'test' })
+  assert.equal(result.ok, false)
+  if (!result.ok) {
+    assert.equal(result.error.code, 'INVALID_EDITS')
+    assert.match(result.error.message, /changes nothing/)
+  }
+})
+
+test('execute() and load() refuse to run inside a caller-owned transaction', () => {
+  const db = new Database(':memory:')
+  const rt = createRuntime(ontology, db, { writeback: noopAdapter() })
+  rt.load(SNAPSHOT)
+  assert.throws(
+    () => db.transaction(() => rt.execute('setAssignee', { orderId: 'O2', assignee: 'x' }, { actor: 'test' }))(),
+    /open transaction/,
+  )
+  assert.throws(() => db.transaction(() => rt.load(SNAPSHOT))(), /open transaction/)
+  // Nothing leaked out of the refused attempts.
+  assert.equal(rt.get<{ assignee: string | null }>('Order', 'O2', { actor: 'test' })!.assignee, null)
+})
+
+test('prune compares canonically — key order cannot hide "back at default"', () => {
+  const mini = defineOntology({
+    name: 'mini',
+    objects: {
+      Widget: defineObject({
+        primaryKey: 'id',
+        properties: { id: z.string(), flags: z.object({ a: z.boolean(), b: z.boolean() }) },
+        owned: { flags: { b: false, a: true } }, // declared in one key order…
+      }),
+    },
+    links: {},
+    actions: {
+      setFlags: defineAction({
+        object: 'Widget',
+        targetParam: 'id',
+        params: { id: z.string(), a: z.boolean(), b: z.boolean() },
+        preconditions: [],
+        effects: ({ object, params }) => [
+          modify('Widget', object.id as string, { flags: { a: params.a, b: params.b } }), // …edited in another
+        ],
+      }),
+    },
+  })
+  const rt = createRuntime(mini, new Database(':memory:'))
+  rt.load({ objects: { Widget: [{ id: 'W1' }] } })
+  rt.execute('setFlags', { id: 'W1', a: false, b: false }, { actor: 'test' }) // a real edit
+  rt.execute('setFlags', { id: 'W1', a: true, b: false }, { actor: 'test' }) // back to the default
+  // The obligation is gone: a re-index that drops W1 goes through.
+  rt.load({ objects: { Widget: [] } })
+  assert.equal(rt.get('Widget', 'W1', { actor: 'test' }), undefined)
+})
+
+test('viaProperty twins are exclusive, and an ontology-owned twin defaults to unlinked', () => {
+  const objects = () => ({
+    Board: defineObject({ primaryKey: 'id', properties: { id: z.string() } }),
+    Card: defineObject({
+      primaryKey: 'id',
+      properties: { id: z.string(), boardId: z.string().nullable() },
+      owned: { boardId: null },
+    }),
+  })
+  // Two links claiming the same property twin: they could never both agree with it.
+  assert.throws(
+    () =>
+      defineOntology({
+        name: 'bad',
+        objects: objects(),
+        links: {
+          pinned: defineLink({ from: 'Board', to: 'Card', kind: 'one-to-many', owned: true, viaProperty: 'boardId' }),
+          filed: defineLink({ from: 'Board', to: 'Card', kind: 'one-to-many', owned: true, viaProperty: 'boardId' }),
+        },
+        actions: {},
+      }),
+    /both declare/,
+  )
+  // An owned twin with a non-null default could never survive a first load.
+  assert.throws(
+    () =>
+      defineOntology({
+        name: 'bad2',
+        objects: {
+          Board: defineObject({ primaryKey: 'id', properties: { id: z.string() } }),
+          Card: defineObject({
+            primaryKey: 'id',
+            properties: { id: z.string(), boardId: z.string() },
+            owned: { boardId: 'lobby' },
+          }),
+        },
+        links: {
+          pinned: defineLink({ from: 'Board', to: 'Card', kind: 'one-to-many', owned: true, viaProperty: 'boardId' }),
+        },
+        actions: {},
+      }),
+    /default null/,
+  )
 })
 
 test('deleting an ontology-owned object is an ontology edit — RESTRICT still applies', () => {
