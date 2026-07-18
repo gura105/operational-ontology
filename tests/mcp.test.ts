@@ -8,7 +8,7 @@ import Database from 'better-sqlite3'
 import { z } from 'zod'
 import { Client } from '@modelcontextprotocol/sdk/client/index.js'
 import { InMemoryTransport } from '@modelcontextprotocol/sdk/inMemory.js'
-import { createRuntime, defineObject, defineOntology, type Runtime } from '../src/core.js'
+import { createRuntime, defineAction, defineObject, defineOntology, type Runtime } from '../src/core.js'
 import { buildMcpServer } from '../src/mcp.js'
 import { createFixtures } from './helpers/tmp-fixtures.js'
 import { integrate } from '../examples/orders/integrate.js'
@@ -177,6 +177,27 @@ test('a targetless agent write creates ontology-owned state that survives re-ind
   })
   const notes = JSON.parse((traverse.content as any)[0].text)
   assert.deepEqual(notes.map((n: any) => n.id), ['NOTE-1'])
+})
+
+test('derived tool names that collide fail at build time, both origins named', () => {
+  const clash = defineOntology({
+    name: 'clash',
+    objects: {
+      Order: defineObject({ primaryKey: 'id', properties: { id: z.string() } }),
+    },
+    links: {},
+    actions: {
+      searchOrder: defineAction({
+        object: 'Order',
+        targetParam: 'id',
+        params: { id: z.string() },
+        preconditions: [],
+        effects: () => [],
+      }),
+    },
+  })
+  const rt = createRuntime(clash, new Database(':memory:'))
+  assert.throws(() => buildMcpServer(rt), /collision.*search_order/)
 })
 
 test('an allowed agent write lands, is audited, and reaches the system of record', async () => {

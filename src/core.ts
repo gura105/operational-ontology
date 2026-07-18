@@ -120,7 +120,11 @@ function canonical(value: unknown): string | undefined {
       if (!Number.isFinite(v)) throw new RangeError('not plain JSON')
       return v
     }
-    if (Array.isArray(v)) return v.map(sort)
+    if (Array.isArray(v)) {
+      // Holes and named properties do not survive JSON — not plain data.
+      if (Object.keys(v).length !== v.length) throw new RangeError('not plain JSON')
+      return v.map(sort)
+    }
     if (typeof v === 'object') {
       const proto = Object.getPrototypeOf(v)
       if (proto !== Object.prototype && proto !== null) throw new RangeError('not plain JSON')
@@ -542,7 +546,7 @@ export class Runtime {
           if (!parsed.success) {
             throw new Error(`invalid ${type} row: ${parsed.error.issues[0]?.message ?? 'schema mismatch'}`)
           }
-          insertObject.run(type, String(parsed.data[def.primaryKey]), JSON.stringify(parsed.data))
+          insertObject.run(type, String(parsed.data[def.primaryKey]), this.#storable(type, parsed.data))
         }
         this.#reapplyOverlay(type)
       }
@@ -592,7 +596,7 @@ export class Runtime {
       const merged = schema.parse({ ...base, ...changes })
       this.#db
         .prepare('UPDATE objects SET data = ? WHERE type = ? AND pk = ?')
-        .run(JSON.stringify(merged), type, pk)
+        .run(this.#storable(type, merged), type, pk)
     }
   }
 
@@ -674,6 +678,36 @@ export class Runtime {
    */
   execute(actionName: string, params: Record<string, unknown>, opts: { actor: string }): ActionResult {
     this.#refuseOpenTransaction('execute')
+    try {
+      return this.#run(actionName, params, opts)
+    } finally {
+      // Every transaction the runtime opens is balanced by the time #run
+      // returns or throws — however it ends. One still open was left by
+      // foreign code (a rule, the adapter), and everything this attempt
+      // wrote, refusal audits included, sits inside it where the caller
+      // could unwind it. Roll the whole intrusion back and put the one
+      // trustworthy fact on the record: the store was tampered with.
+      if (this.#db.inTransaction) {
+        this.#db.exec('ROLLBACK')
+        const violation = reject(
+          'FOREIGN_TRANSACTION',
+          'a rule or the write-back adapter left a transaction open on the ontology store — ' +
+            'rolled back; model code and adapters must not touch this database',
+        )
+        this.#audit({
+          actor: opts.actor,
+          action: actionName,
+          target: '(foreign transaction)',
+          params,
+          status: 'rejected',
+          error: violation,
+        })
+        throw new Error(violation.message)
+      }
+    }
+  }
+
+  #run(actionName: string, params: Record<string, unknown>, opts: { actor: string }): ActionResult {
     // Every attempt is audited — including the ones that never reach the model.
     const refuseAs = (
       target: string,
@@ -860,31 +894,10 @@ export class Runtime {
       }
     }
 
-    // Foreign code ran since the entry check — rules and the adapter. If any
-    // of it left a transaction open on this connection, the commit below
-    // would be a savepoint inside it: rollback-able after success was
-    // reported, audit entry included. Undo the intrusion and refuse loudly —
-    // the ontology store is the runtime's alone.
-    if (this.#db.inTransaction) {
-      this.#db.exec('ROLLBACK')
-      const violation = reject(
-        'FOREIGN_TRANSACTION',
-        'a rule or the write-back adapter left a transaction open on the ontology store — ' +
-          'rolled back; model code and adapters must not touch this database',
-      )
-      this.#audit({
-        actor: opts.actor,
-        action: actionName,
-        target,
-        params: parsed.data,
-        status: 'rejected',
-        error: violation,
-        edits,
-      })
-      throw new Error(violation.message)
-    }
-
-    // Edits and their audit entry commit together or not at all.
+    // Edits and their audit entry commit together or not at all. (If foreign
+    // code left a transaction open, this "commit" is a savepoint inside it —
+    // execute()'s exit guard detects that, rolls the whole intrusion back,
+    // and turns the attempt into FOREIGN_TRANSACTION.)
     try {
       this.#db.transaction(() => {
         this.#applyEdits(edits)
@@ -1100,6 +1113,28 @@ export class Runtime {
     }
   }
 
+  /**
+   * The gate every stored row passes through. The store keeps what a schema
+   * produced and will feed it back to the same schema later, so at every
+   * write the value must be plain JSON data (or it would come back changed)
+   * and a fixed point of its schema (or it would come back refused). Checked
+   * here at the boundary, per value — a declaration alone cannot hold a
+   * conditional transform to it.
+   */
+  #storable(type: string, value: Record<string, unknown>): string {
+    const encoded = canonical(value)
+    if (encoded === undefined) {
+      throw new Error(`${type} row is not plain JSON data — the store cannot hold it faithfully`)
+    }
+    const again = this.#schemas.get(type)!.safeParse(value)
+    if (!again.success || canonical(again.data) !== encoded) {
+      throw new Error(
+        `the ${type} schema does not accept its own output — stored state must be a fixed point of its schema`,
+      )
+    }
+    return JSON.stringify(value)
+  }
+
   /** Raw fetch without visibility — for internal integrity checks only. */
   #fetch<O = Record<string, unknown>>(type: string, pk: string): O | undefined {
     this.#objectDef(type)
@@ -1156,7 +1191,7 @@ export class Runtime {
         const next = schema.parse({ ...current, ...edit.changes })
         this.#db
           .prepare('UPDATE objects SET data = ? WHERE type = ? AND pk = ?')
-          .run(JSON.stringify(next), edit.object, edit.pk)
+          .run(this.#storable(edit.object, next), edit.object, edit.pk)
         // Ontology-owned changes on a source-backed row also land in the
         // overlay — the layer load() reapplies over a re-indexed base. A
         // value back at its declared default is pruned, so clearing an edit
@@ -1196,7 +1231,7 @@ export class Runtime {
         }
         this.#db
           .prepare('INSERT INTO objects (type, pk, data) VALUES (?, ?, ?)')
-          .run(edit.object, edit.pk, JSON.stringify(data))
+          .run(edit.object, edit.pk, this.#storable(edit.object, data))
       } else {
         // RESTRICT: an object with links still attached refuses to die — unlink first.
         for (const [name, link] of Object.entries(this.ontology.links)) {
@@ -1268,7 +1303,7 @@ export class Runtime {
    */
   #validateViaProperties(): void {
     for (const [name, link] of Object.entries(this.ontology.links)) {
-      if (!link.viaProperty) continue
+      if (link.viaProperty === undefined) continue
       const parentOf = new Map<string, string>()
       const linkRows = this.#db
         .prepare('SELECT from_pk, to_pk FROM links WHERE name = ?')

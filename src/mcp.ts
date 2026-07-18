@@ -20,6 +20,18 @@ import { isTargeted, type Runtime } from './core.js'
 
 export function buildMcpServer(rt: Runtime, opts: { agent?: string } = {}): McpServer {
   const server = new McpServer({ name: `operational-ontology:${rt.ontology.name}`, version: '0.1.0' })
+  // Tool names are derived from model names, so two model names can collide
+  // after snake-casing (object `Order` ⇒ search_order, action `searchOrder`
+  // ⇒ search_order). Fail at build time with both origins named.
+  const claimed = new Map<string, string>()
+  const toolName = (name: string, origin: string): string => {
+    const holder = claimed.get(name)
+    if (holder !== undefined) {
+      throw new Error(`MCP tool name collision: "${name}" is derived from both ${holder} and ${origin} — rename one`)
+    }
+    claimed.set(name, origin)
+    return name
+  }
   // Over stdio there is no session id, so every caller collapses to one
   // identity — pass opts.agent to name the agent this server serves.
   const actorOf = (extra?: { sessionId?: string }) => `agent:${extra?.sessionId ?? opts.agent ?? 'mcp'}`
@@ -62,7 +74,7 @@ export function buildMcpServer(rt: Runtime, opts: { agent?: string } = {}): McpS
       Object.entries(def.properties).map(([key, schema]) => [key, (schema as z.ZodType).optional()]),
     )
     server.registerTool(
-      `search_${snake(typeName)}`,
+      toolName(`search_${snake(typeName)}`, `object type ${typeName}`),
       {
         description:
           `Search ${typeName} objects${def.description ? ` (${def.description})` : ''}. ` +
@@ -74,7 +86,7 @@ export function buildMcpServer(rt: Runtime, opts: { agent?: string } = {}): McpS
         asJson(rt.search(typeName, { actor: actorOf(extra), filter: prune(filter) }))),
     )
     server.registerTool(
-      `get_${snake(typeName)}`,
+      toolName(`get_${snake(typeName)}`, `object type ${typeName}`),
       {
         description: `Fetch a single ${typeName} by primary key (${def.primaryKey}).`,
         inputSchema: { [def.primaryKey]: z.string() },
@@ -94,7 +106,7 @@ export function buildMcpServer(rt: Runtime, opts: { agent?: string } = {}): McpS
     }
     if (numericKeys.length > 0) aggregateShape.sum = z.enum(numericKeys as [string, ...string[]]).optional()
     server.registerTool(
-      `aggregate_${snake(typeName)}`,
+      toolName(`aggregate_${snake(typeName)}`, `object type ${typeName}`),
       {
         description:
           `Group ${typeName} objects by a property, counting each group and optionally summing ` +
@@ -117,7 +129,7 @@ export function buildMcpServer(rt: Runtime, opts: { agent?: string } = {}): McpS
 
   for (const [linkName, link] of Object.entries(rt.ontology.links)) {
     server.registerTool(
-      `traverse_${snake(linkName)}`,
+      toolName(`traverse_${snake(linkName)}`, `link type ${linkName}`),
       {
         description:
           `Traverse the ${link.from} → ${link.to} link "${linkName}" (${link.kind}). ` +
@@ -135,7 +147,7 @@ export function buildMcpServer(rt: Runtime, opts: { agent?: string } = {}): McpS
 
   for (const [actionName, action] of Object.entries(rt.ontology.actions)) {
     server.registerTool(
-      snake(actionName),
+      toolName(snake(actionName), `action ${actionName}`),
       {
         description:
           `${action.description ?? (isTargeted(action) ? `Action on ${action.object}.` : 'Action.')} ` +
@@ -154,7 +166,7 @@ export function buildMcpServer(rt: Runtime, opts: { agent?: string } = {}): McpS
   }
 
   server.registerTool(
-    'read_audit_log',
+    toolName('read_audit_log', 'the built-in audit view'),
     {
       description:
         'Read the append-only audit log: every applied and rejected action, with actor and params. ' +

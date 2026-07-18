@@ -768,6 +768,128 @@ test('an adapter that opens a transaction on the store is rolled back and refuse
   assert.equal(rt.auditLog({ status: 'applied' }).length, 0)
 })
 
+test('a foreign transaction is caught however the attempt ends — adapter throw included', () => {
+  const db = new Database(':memory:')
+  const chaos: WritebackAdapter = {
+    name: 'chaos',
+    apply: () => {
+      db.exec('BEGIN')
+      throw new Error('source failed')
+    },
+  }
+  const rt = createRuntime(ontology, db, { writeback: chaos })
+  rt.load(SNAPSHOT)
+  assert.throws(() => rt.execute('cancelOrder', { orderId: 'O2', reason: 'x' }, { actor: 'test' }), /transaction open/)
+  assert.equal(db.inTransaction, false)
+  assert.equal(rt.get<{ status: string }>('Order', 'O2', asTest)!.status, 'pending')
+  // The WRITEBACK_FAILED refusal was written inside the intruding
+  // transaction and rolled back with it — the one fact that survives is the
+  // tampering itself.
+  assert.deepEqual(rt.auditLog().map((e) => e.error?.code), ['FOREIGN_TRANSACTION'])
+})
+
+test('a foreign transaction opened by a rule is caught on the refusal path too', () => {
+  const db = new Database(':memory:')
+  const trap = defineOntology({
+    name: 'trap',
+    objects: {
+      Thing: defineObject({ primaryKey: 'id', properties: { id: z.string() } }),
+    },
+    links: {},
+    actions: {
+      diversion: defineAction({
+        object: 'Thing',
+        targetParam: 'id',
+        params: { id: z.string() },
+        preconditions: [
+          () => {
+            db.exec('BEGIN')
+            return reject('DIVERTED', 'refused, with a transaction left behind')
+          },
+        ],
+        effects: () => [],
+      }),
+    },
+  })
+  const rt = createRuntime(trap, db)
+  rt.load({ objects: { Thing: [{ id: 'T1' }] } })
+  assert.throws(() => rt.execute('diversion', { id: 'T1' }, { actor: 'test' }), /transaction open/)
+  assert.equal(db.inTransaction, false)
+  assert.deepEqual(rt.auditLog().map((e) => e.error?.code), ['FOREIGN_TRANSACTION'])
+})
+
+test('every stored row must be plain JSON — whichever door it came through', () => {
+  // Through an action: an ontology-owned type whose schema emits a Date.
+  const clocks = defineOntology({
+    name: 'clocks',
+    objects: {
+      Stamp: defineObject({ primaryKey: 'id', owned: true, properties: { id: z.string(), at: z.date() } }),
+    },
+    links: {},
+    actions: {
+      mark: defineAction({
+        params: { id: z.string() },
+        preconditions: [],
+        effects: ({ params }) => [create('Stamp', params.id as string, { id: params.id, at: new Date(0) })],
+      }),
+    },
+  })
+  const rt = createRuntime(clocks, new Database(':memory:'))
+  const result = rt.execute('mark', { id: 'S1' }, { actor: 'test' })
+  assert.equal(result.ok, false)
+  if (!result.ok) {
+    assert.equal(result.error.code, 'INVALID_EDITS')
+    assert.match(result.error.message, /plain JSON/)
+  }
+  // Through the pipeline: a source-backed schema that coerces into a Date.
+  const feeds = defineOntology({
+    name: 'feeds',
+    objects: {
+      Event: defineObject({ primaryKey: 'id', properties: { id: z.string(), at: z.coerce.date() } }),
+    },
+    links: {},
+    actions: {},
+  })
+  const rt2 = createRuntime(feeds, new Database(':memory:'))
+  assert.throws(() => rt2.load({ objects: { Event: [{ id: 'E1', at: '2020-01-01' }] } }), /plain JSON/)
+})
+
+test('a conditional transform is caught at the store boundary, not just at definition', () => {
+  const moody = defineOntology({
+    name: 'moody',
+    objects: {
+      Gauge: defineObject({
+        primaryKey: 'id',
+        properties: {
+          id: z.string(),
+          // 'idle' is a fixed point of this schema; every other string is not.
+          level: z.string().transform((s) => (s === 'idle' ? 'idle' : (s.length as unknown as string))),
+        },
+        owned: { level: 'idle' }, // passes the definition-time spot check…
+      }),
+    },
+    links: {},
+    actions: {
+      poke: defineAction({
+        object: 'Gauge',
+        targetParam: 'id',
+        params: { id: z.string(), level: z.string() },
+        preconditions: [],
+        effects: ({ object, params }) => [modify('Gauge', object.id as string, { level: params.level })],
+      }),
+    },
+  })
+  const rt = createRuntime(moody, new Database(':memory:'))
+  rt.load({ objects: { Gauge: [{ id: 'G1' }] } })
+  // …but a value the schema will not accept back is refused at the write.
+  const result = rt.execute('poke', { id: 'G1', level: 'abc' }, { actor: 'test' })
+  assert.equal(result.ok, false)
+  if (!result.ok) {
+    assert.equal(result.error.code, 'INVALID_EDITS')
+    assert.match(result.error.message, /own output/)
+  }
+})
+
 test('owned values live in plain JSON: class instances and one-way transforms are refused at definition', () => {
   // A Date is not plain JSON — it would come back from the store as
   // something else entirely.
