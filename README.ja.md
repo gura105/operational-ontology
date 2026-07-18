@@ -9,6 +9,11 @@
 >
 > セマンティックレイヤーはビジネスを「読む」ためのもの。Operational Ontology はビジネスを「動かす」ためのもの。
 
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="./assets/hero-diagram-dark.svg">
+  <img src="./assets/hero-diagram.svg" alt="読み取りは共有モデルからエージェント・アプリ・人へ。書き込みは監査つきのアクションゲートを通り、状態を所有するシステムオブレコードへ書き戻される。">
+</picture>
+
 Palantir Foundry の Ontology はこのパターンの一実装です。このリポジトリはもう一つの実装 — 最小で可読なリファレンス実装、つまり概念の最小化です。これはフレームワークではなく「動く定義」です。読んで、フォークして、アイデアを盗んでください。
 
 ## なぜ別の名前が要るのか

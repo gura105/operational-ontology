@@ -9,6 +9,11 @@
 >
 > A semantic layer lets you *read* your business. An operational ontology lets you *run* it.
 
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="./assets/hero-diagram-dark.svg">
+  <img src="./assets/hero-diagram.svg" alt="Reads travel from a shared model to agents, apps, and people. Writes enter through an audited action gate and write back to the systems of record that own the state.">
+</picture>
+
 Palantir Foundry's Ontology is one implementation of this pattern. This repository is another: a minimal, readable reference implementation — the concept, minimized. It is a working definition, not a framework. Read it, fork it, steal the ideas.
 
 ## Why another word?
