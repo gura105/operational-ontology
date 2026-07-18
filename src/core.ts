@@ -111,7 +111,11 @@ function canonical(value: unknown): string | undefined {
       : Array.isArray(v)
         ? v.map(sort)
         : v
-  return JSON.stringify(sort(value))
+  try {
+    return JSON.stringify(sort(value))
+  } catch {
+    return undefined // BigInt, circular — not JSON, so not an owned value
+  }
 }
 
 export interface LinkTypeDef {
