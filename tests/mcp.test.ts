@@ -111,13 +111,19 @@ test('aggregate rejects property names the model does not define', async () => {
   assert.equal(result.isError, true)
 })
 
-test('wrapped numeric properties (nullable/optional) are still summable', async () => {
+test('wrapped numeric properties (nullable/optional/defaulted/stacked) are still summable', async () => {
   const mini = defineOntology({
     name: 'mini',
     objects: {
       Thing: defineObject({
         primaryKey: 'id',
-        properties: { id: z.string(), label: z.string(), score: z.number().nullable() },
+        properties: {
+          id: z.string(),
+          label: z.string(),
+          score: z.number().nullable(),
+          bonus: z.number().default(0),
+          depth: z.number().nullable().optional(),
+        },
       }),
     },
     links: {},
@@ -125,22 +131,24 @@ test('wrapped numeric properties (nullable/optional) are still summable', async 
   })
   const rt = createRuntime(mini, new Database(':memory:'))
   rt.load({ objects: { Thing: [
-    { id: 'T1', label: 'a', score: 5 },
-    { id: 'T2', label: 'a', score: null },
+    { id: 'T1', label: 'a', score: 5, bonus: 2, depth: 3 },
+    { id: 'T2', label: 'a', score: null, bonus: 1 },
   ] } })
   const server = buildMcpServer(rt)
   const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair()
   const client = new Client({ name: 'mini-client', version: '0.0.0' })
   await Promise.all([server.connect(serverTransport), client.connect(clientTransport)])
 
-  const result = await client.callTool({
-    name: 'aggregate_thing',
-    arguments: { group_by: 'label', sum: 'score' },
-  })
-  assert.notEqual(result.isError, true)
-  const groups = JSON.parse((result.content as any)[0].text)
-  assert.equal(groups.a.count, 2)
-  assert.equal(groups.a.sum, 5) // null coalesces to 0
+  for (const [property, expected] of [['score', 5], ['bonus', 3], ['depth', 3]] as const) {
+    const result = await client.callTool({
+      name: 'aggregate_thing',
+      arguments: { group_by: 'label', sum: property },
+    })
+    assert.notEqual(result.isError, true, `${property} should be summable`)
+    const groups = JSON.parse((result.content as any)[0].text)
+    assert.equal(groups.a.count, 2)
+    assert.equal(groups.a.sum, expected)
+  }
 })
 
 test('an allowed agent write lands, is audited, and reaches the system of record', async () => {

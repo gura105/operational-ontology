@@ -129,7 +129,7 @@ const ontology = defineOntology({
 })
 ```
 
-The definition is a plain value — enumerable, diffable, versionable. That is what makes the MCP surface derivable and the write path closed: `Runtime.execute()` is the only public *operational* write path — `load()` re-indexes the sources: replay, not decision, an infrastructure boundary rather than a user API — and it always runs *validate → preconditions → effects → write-back → atomic commit of edits + audit entry*.
+The definition is a plain value — enumerable, diffable, versionable. That is what makes the MCP surface derivable and the write path closed: `Runtime.execute()` is the only public *operational* write path — `load()` re-indexes the sources: replay, not decision, an infrastructure boundary rather than a user API — and it always runs *validate → preconditions → effects → validate the edit plan → write-back → atomic commit of edits + audit entry*.
 
 Reads carry identity too: every `search` / `get` / `traverse` / `aggregate` runs as an `actor`, and an object type may attach a `visibility` predicate — row-level security in its minimal form, living in the model like everything else. A hidden object is indistinguishable from a nonexistent one, for reads and for action targets alike.
 

@@ -85,12 +85,32 @@ const ontology = defineOntology({
     }),
     corruptOrder: defineAction({
       // Deliberately produces an edit that violates the Order schema —
-      // used to prove that a failing commit leaves no partial state behind.
+      // used to prove the plan is refused before write-back ever runs.
       object: 'Order',
       targetParam: 'orderId',
       params: { orderId: z.string() },
       preconditions: [],
       effects: ({ object }) => [modify('Order', object.id as string, { status: 'bogus' })],
+      writeback: true,
+    }),
+    typoOrder: defineAction({
+      // A typo'd property — must be refused, not silently stripped.
+      object: 'Order',
+      targetParam: 'orderId',
+      params: { orderId: z.string() },
+      preconditions: [],
+      effects: ({ object }) => [modify('Order', object.id as string, { vaporware: 1 })],
+      writeback: true,
+    }),
+    conjureNoise: defineAction({
+      object: 'Order',
+      targetParam: 'orderId',
+      params: { orderId: z.string() },
+      preconditions: [],
+      effects: () => [
+        create('Order', 'N1', { id: 'N1', customerId: 'C1', status: 'pending', total: 1, ghost: true }),
+      ],
+      writeback: true,
     }),
     purgeOrder: defineAction({
       // Deletes without unlinking — the RESTRICT rule must catch it.
@@ -259,12 +279,35 @@ test('statically invalid edits are refused before the adapter ever runs', () => 
   const calls: string[] = []
   const spy: WritebackAdapter = { name: 'spy', apply: () => calls.push('adapter') && undefined }
   const rt = setup(spy)
-  const result = rt.execute('corruptOrder', { orderId: 'O2' }, { actor: 'test' })
-  assert.equal(result.ok, false)
-  if (!result.ok) assert.equal(result.error.code, 'INVALID_EDITS')
-  assert.deepEqual(calls, []) // the write-back adapter never saw the bad plan
+  // All three actions declare writeback: true — the spy proves the plan
+  // was refused before it could leave the process.
+  const bogus = rt.execute('corruptOrder', { orderId: 'O2' }, { actor: 'test' })
+  assert.equal(bogus.ok, false)
+  if (!bogus.ok) assert.equal(bogus.error.code, 'INVALID_EDITS')
+
+  const typo = rt.execute('typoOrder', { orderId: 'O2' }, { actor: 'test' })
+  assert.equal(typo.ok, false)
+  if (!typo.ok) {
+    assert.equal(typo.error.code, 'INVALID_EDITS')
+    assert.match(typo.error.message, /vaporware/) // refused, not silently stripped
+  }
+
+  const noise = rt.execute('conjureNoise', { orderId: 'O2' }, { actor: 'test' })
+  assert.equal(noise.ok, false)
+  if (!noise.ok) assert.match(noise.error.message, /ghost/)
+
+  assert.deepEqual(calls, []) // the write-back adapter never saw a bad plan
   assert.equal(rt.get<{ status: string }>('Order', 'O2', asTest)!.status, 'pending')
-  assert.equal(rt.auditLog({ status: 'rejected' })[0]?.error?.code, 'INVALID_EDITS')
+  assert.equal(rt.auditLog({ status: 'rejected' }).length, 3)
+})
+
+test('a storage fault is audited as READ_FAILED', () => {
+  const db = new Database(':memory:')
+  const rt = createRuntime(ontology, db, { writeback: noopAdapter() })
+  rt.load(SNAPSHOT)
+  db.prepare("UPDATE objects SET data = 'not json' WHERE pk = 'O2'").run()
+  assert.throws(() => rt.execute('cancelOrder', { orderId: 'O2', reason: 'x' }, { actor: 'test' }))
+  assert.equal(rt.auditLog({ status: 'rejected' })[0]?.error?.code, 'READ_FAILED')
 })
 
 test('actions can rewire the graph itself — links are edits too', () => {

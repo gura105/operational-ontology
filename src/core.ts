@@ -359,7 +359,8 @@ export class Runtime {
   /**
    * Execute an action. This is the only way state changes:
    * validate params → load target → preconditions → effects →
-   * write-back (if configured) → atomically commit edits + audit entry.
+   * validate the edit plan → write-back (if configured) →
+   * atomically commit edits + audit entry.
    */
   execute(actionName: string, params: Record<string, unknown>, opts: { actor: string }): ActionResult {
     // Every attempt is audited — including the ones that never reach the model.
@@ -439,7 +440,13 @@ export class Runtime {
     try {
       this.#validateEdits(edits)
     } catch (e) {
-      return refuse(reject('INVALID_EDITS', e instanceof Error ? e.message : String(e)))
+      const message =
+        e instanceof z.ZodError
+          ? `${e.issues[0]?.path.join('.') || 'edit'}: ${e.issues[0]?.message ?? 'invalid'}`
+          : e instanceof Error
+            ? e.message
+            : String(e)
+      return refuse(reject('INVALID_EDITS', message))
     }
 
     if (action.writeback) {
@@ -528,6 +535,16 @@ export class Runtime {
       }
       const def = this.#objectDef(edit.object)
       const schema = this.#schemas.get(edit.object)!
+      if (edit.op === 'create' || edit.op === 'modify') {
+        // Unknown keys are refused, not silently stripped: a stripped key
+        // would still travel to the write-back adapter in the raw edit and
+        // let source and store diverge without a trace.
+        const payload = edit.op === 'create' ? edit.data : edit.changes
+        const unknown = Object.keys(payload).filter((key) => !(key in def.properties))
+        if (unknown.length > 0) {
+          throw new Error(`unknown propert${unknown.length > 1 ? 'ies' : 'y'} "${unknown.join('", "')}" on ${edit.object}`)
+        }
+      }
       if (edit.op === 'create') {
         const data = schema.parse(edit.data)
         if (String(data[def.primaryKey]) !== edit.pk) {
