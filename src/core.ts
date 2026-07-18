@@ -344,14 +344,20 @@ export class Runtime {
     type: string,
     opts: { actor: string } & AggregateOptions<O>,
   ): Record<string, { count: number; sum?: number }> {
-    const out: Record<string, { count: number; sum?: number }> = {}
+    // Accumulate in a Map: group keys are data, and data named "__proto__"
+    // must not walk — let alone pollute — the prototype chain.
+    const out = new Map<string, { count: number; sum?: number }>()
     for (const obj of this.search<O>(type, { actor: opts.actor, filter: opts.filter })) {
       const key = opts.groupBy(obj)
-      const bucket = (out[key] ??= { count: 0, ...(opts.sum ? { sum: 0 } : {}) })
+      let bucket = out.get(key)
+      if (!bucket) {
+        bucket = { count: 0, ...(opts.sum ? { sum: 0 } : {}) }
+        out.set(key, bucket)
+      }
       bucket.count += 1
       if (opts.sum) bucket.sum = (bucket.sum ?? 0) + opts.sum(obj)
     }
-    return out
+    return Object.fromEntries(out)
   }
 
   // ── Write side: there is exactly one door ──

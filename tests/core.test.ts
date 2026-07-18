@@ -456,6 +456,17 @@ test('aggregation happens at query time', () => {
   assert.deepEqual(byStatus, { shipped: { count: 1, sum: 100 }, pending: { count: 1, sum: 200 } })
 })
 
+test('aggregation is immune to prototype-named groups', () => {
+  const rt = setup()
+  const groups = rt.aggregate<{ id: string }>('Order', {
+    ...asTest,
+    groupBy: (o) => (o.id === 'O1' ? '__proto__' : 'toString'),
+  })
+  assert.equal(Object.getOwnPropertyDescriptor(groups, '__proto__')?.value?.count, 1)
+  assert.equal(Object.getOwnPropertyDescriptor(groups, 'toString')?.value?.count, 1)
+  assert.equal(({} as Record<string, unknown>).count, undefined) // Object.prototype untouched
+})
+
 test('indexing validates rows against the model', () => {
   const rt = createRuntime(ontology, new Database(':memory:'))
   assert.throws(() =>
