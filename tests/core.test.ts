@@ -914,6 +914,23 @@ test('owned values live in plain JSON: class instances and one-way transforms ar
   )
 })
 
+test('a hole and a named property cannot cancel out in an array', () => {
+  // new Array(2) with one element and one named prop: JSON would emit
+  // [null,"x"] and drop the prop — two silent rewrites in one value.
+  const compensated = new Array(2) as unknown[] & { meta?: boolean }
+  compensated[1] = 'x'
+  compensated.meta = true
+  assert.throws(
+    () =>
+      defineObject({
+        primaryKey: 'id',
+        properties: { id: z.string(), bag: z.any() },
+        owned: { bag: compensated },
+      }),
+    /plain JSON/,
+  )
+})
+
 test('empty names are not identifiers', () => {
   assert.throws(
     () =>

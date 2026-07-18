@@ -197,7 +197,8 @@ test('derived tool names that collide fail at build time, both origins named', (
     },
   })
   const rt = createRuntime(clash, new Database(':memory:'))
-  assert.throws(() => buildMcpServer(rt), /collision.*search_order/)
+  // Both origins are named, so the fix is findable from the error alone.
+  assert.throws(() => buildMcpServer(rt), /collision.*search_order.*object type Order.*action searchOrder/)
 })
 
 test('an allowed agent write lands, is audited, and reaches the system of record', async () => {

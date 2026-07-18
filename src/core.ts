@@ -122,7 +122,12 @@ function canonical(value: unknown): string | undefined {
     }
     if (Array.isArray(v)) {
       // Holes and named properties do not survive JSON — not plain data.
-      if (Object.keys(v).length !== v.length) throw new RangeError('not plain JSON')
+      // Checked key by key: a hole and a named property can cancel out in a
+      // bare length comparison.
+      const keys = Object.keys(v)
+      if (keys.length !== v.length || keys.some((key, i) => key !== String(i))) {
+        throw new RangeError('not plain JSON')
+      }
       return v.map(sort)
     }
     if (typeof v === 'object') {
