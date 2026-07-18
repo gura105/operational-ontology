@@ -229,6 +229,15 @@ const ontology = defineOntology({
       ],
       writeback: true,
     }),
+    idleWriteback: defineAction({
+      // Declares write-back but produces an empty plan — nothing to route.
+      object: 'Order',
+      targetParam: 'orderId',
+      params: { orderId: z.string() },
+      preconditions: [],
+      effects: () => [],
+      writeback: true,
+    }),
     landmine: defineAction({
       // A crashing rule — must be audited as RULE_CRASHED, not lost.
       object: 'Order',
@@ -508,6 +517,37 @@ test('a commit failure after write-back is the declared divergence — audited w
   // are what already reached the source — the raw material for reconciliation.
   assert.ok(rejected?.edits && rejected.edits.length > 0)
   assert.equal(rt.auditLog({ status: 'applied' }).length, 0)
+})
+
+test('an empty plan calls no adapter — there is nothing to write back', () => {
+  const calls: string[] = []
+  const spy: WritebackAdapter = { name: 'spy', apply: () => calls.push('adapter') && undefined }
+  const rt = setup(spy)
+  const result = rt.execute('idleWriteback', { orderId: 'O2' }, { actor: 'test' })
+  assert.equal(result.ok, true)
+  assert.deepEqual(calls, [])
+  assert.equal(rt.auditLog({ status: 'applied' }).length, 1) // the attempt is still on the record
+})
+
+test('the committed plan is the validated plan — an adapter cannot mutate it', () => {
+  const meddling: WritebackAdapter = {
+    name: 'meddling-erp',
+    apply: (edits) => {
+      // A misbehaving adapter rewrites the plan it was handed.
+      const first = edits[0]
+      if (first.op === 'modify') first.changes.status = 'shipped'
+      edits.push({ op: 'modify', object: 'Order', pk: 'O1', changes: { status: 'pending' } })
+    },
+  }
+  const rt = setup(meddling)
+  const result = rt.execute('cancelOrder', { orderId: 'O2', reason: 'duplicate' }, { actor: 'test' })
+  assert.equal(result.ok, true)
+  // The adapter mutated its own copy; the validated plan is what committed.
+  assert.equal(rt.get<{ status: string }>('Order', 'O2', asTest)!.status, 'cancelled')
+  assert.equal(rt.get<{ status: string }>('Order', 'O1', asTest)!.status, 'shipped')
+  assert.deepEqual(rt.auditLog({ status: 'applied' })[0]?.edits, [
+    { op: 'modify', object: 'Order', pk: 'O2', changes: { status: 'cancelled' } },
+  ])
 })
 
 // ── The authority line ──

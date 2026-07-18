@@ -722,13 +722,18 @@ export class Runtime {
       return refuse(reject('INVALID_EDITS', editErrorMessage(e)))
     }
 
-    if (action.writeback) {
+    // An empty plan changes nothing, so there is nothing to write back —
+    // the attempt still commits an audit entry below.
+    if (action.writeback && edits.length > 0) {
       if (!this.#writeback) {
         return refuse(reject('NO_WRITEBACK_ADAPTER', 'action requires write-back but no adapter is configured'))
       }
       try {
-        // Write-back first: if the system of record refuses, nothing changes here.
-        this.#writeback.apply(edits, { action: actionName, actor: opts.actor })
+        // Write-back first: if the system of record refuses, nothing changes
+        // here. The adapter gets its own copy of the plan: what commits below
+        // is the plan that was validated, not whatever the adapter left
+        // behind on a shared reference.
+        this.#writeback.apply(structuredClone(edits), { action: actionName, actor: opts.actor })
       } catch (e) {
         // The adapter may have partially applied the plan before throwing —
         // source-side atomicity is the adapter's contract, not this
