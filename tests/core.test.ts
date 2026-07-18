@@ -318,6 +318,15 @@ test('statically invalid edits are refused before the adapter ever runs', () => 
   assert.equal(rt.auditLog({ status: 'rejected' }).length, 4)
 })
 
+test('prototype names are not actions, objects, or links', () => {
+  const rt = setup()
+  const result = rt.execute('toString', {}, { actor: 'test' })
+  assert.equal(result.ok, false)
+  if (!result.ok) assert.equal(result.error.code, 'UNKNOWN_ACTION')
+  assert.throws(() => rt.get('toString', 'x', asTest), /unknown object type/)
+  assert.throws(() => rt.traverse('toString', 'x', asTest), /unknown link type/)
+})
+
 test('a storage fault is audited as READ_FAILED', () => {
   const db = new Database(':memory:')
   const rt = createRuntime(ontology, db, { writeback: noopAdapter() })

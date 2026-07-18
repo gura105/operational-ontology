@@ -228,6 +228,6 @@ Two declared design choices follow. First, the slots: `preconditions` is a requi
 
 ## Status
 
-v0.1 — reference implementation. Scope is frozen for v0; the declared v0 simplifications — edit survival across re-indexing, link properties and composite keys, typed rule contexts — are the v0.2 worklist. Built and verified with Node 24, better-sqlite3, zod 4, MCP SDK 1.29.
+v0.1 — reference implementation. Scope is frozen for v0; the declared v0 simplifications — edit survival across re-indexing, link properties and composite keys, typed rule contexts, nested-property strictness — are the v0.2 worklist. Built and verified with Node 24, better-sqlite3, zod 4, MCP SDK 1.29.
 
 MIT © gura105

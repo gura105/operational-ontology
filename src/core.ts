@@ -322,7 +322,7 @@ export class Runtime {
     pk: string,
     opts: { actor: string; direction?: 'forward' | 'reverse' },
   ): O[] {
-    const link = this.ontology.links[linkName]
+    const link = Object.hasOwn(this.ontology.links, linkName) ? this.ontology.links[linkName] : undefined
     if (!link) throw new Error(`unknown link type "${linkName}"`)
     const [where, select, targetType, originType] =
       (opts.direction ?? 'forward') === 'forward'
@@ -369,7 +369,9 @@ export class Runtime {
       return { ok: false, error }
     }
 
-    const action = this.ontology.actions[actionName]
+    const action = Object.hasOwn(this.ontology.actions, actionName)
+      ? this.ontology.actions[actionName]
+      : undefined
     if (!action) {
       return refuseAs('(unknown action)', params, reject('UNKNOWN_ACTION', `no action named "${actionName}"`))
     }
@@ -517,7 +519,7 @@ export class Runtime {
   // ── Private: the only code that touches object state ──
 
   #objectDef(type: string): ObjectTypeDef {
-    const def = this.ontology.objects[type]
+    const def = Object.hasOwn(this.ontology.objects, type) ? this.ontology.objects[type] : undefined
     if (!def) throw new Error(`unknown object type "${type}"`)
     return def
   }
