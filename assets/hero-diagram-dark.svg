@@ -6,7 +6,6 @@
     <style>
       text {
         font-family: system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", Helvetica, Arial, sans-serif;
-        fill: #F0F3F6;
       }
     </style>
   </defs>
@@ -15,21 +14,21 @@
 
   <!-- The ontology is a shared layer above state owned elsewhere. -->
   <rect x="54" y="214" width="1092" height="324" rx="44" fill="#0D1117" stroke="#D0D7DE" stroke-width="3"/>
-  <text x="600" y="269" text-anchor="middle" font-size="25" font-weight="760" letter-spacing="1.5">OPERATIONAL ONTOLOGY</text>
+  <text x="600" y="269" text-anchor="middle" font-size="25" font-weight="760" letter-spacing="1.5" fill="#F0F3F6">OPERATIONAL ONTOLOGY</text>
 
   <!-- Consumers -->
   <rect x="430" y="54" width="340" height="88" rx="20" fill="#161B22" stroke="#8C959F" stroke-width="2.5"/>
-  <text x="600" y="106" text-anchor="middle" font-size="23" font-weight="700">agents · apps · people</text>
+  <text x="600" y="106" text-anchor="middle" font-size="23" font-weight="700" fill="#F0F3F6">agents · apps · people</text>
 
   <!-- Shared model -->
   <rect x="108" y="344" width="276" height="126" rx="24" fill="#161B22" stroke="#A7AFB8" stroke-width="2.5"/>
-  <text x="246" y="402" text-anchor="middle" font-size="22" font-weight="700">shared model</text>
-  <text x="246" y="431" text-anchor="middle" font-size="19" font-weight="500">objects · links</text>
+  <text x="246" y="402" text-anchor="middle" font-size="22" font-weight="700" fill="#F0F3F6">shared model</text>
+  <text x="246" y="431" text-anchor="middle" font-size="19" font-weight="500" fill="#F0F3F6">objects · links</text>
 
   <!-- Governed action gate -->
   <path d="M 925 334 L 1048 407 L 925 480 L 802 407 Z" fill="#2A2116" stroke="#F2A63A" stroke-width="3" stroke-linejoin="round"/>
-  <text x="925" y="402" text-anchor="middle" font-size="22" font-weight="750">action gate</text>
-  <text x="925" y="431" text-anchor="middle" font-size="19" font-weight="600">rules · audit</text>
+  <text x="925" y="402" text-anchor="middle" font-size="22" font-weight="750" fill="#F0F3F6">action gate</text>
+  <text x="925" y="431" text-anchor="middle" font-size="19" font-weight="600" fill="#F0F3F6">rules · audit</text>
 
   <!-- Litmus question -->
   <text x="600" y="399" text-anchor="middle" font-size="20" font-style="italic" font-weight="500" fill="#8C959F">“Can you cancel an order</text>
@@ -37,7 +36,7 @@
 
   <!-- System of record: the declared home of source-backed state. -->
   <rect x="432" y="628" width="336" height="76" rx="5" fill="#161B22" stroke="#8C959F" stroke-width="2.5"/>
-  <text x="600" y="674" text-anchor="middle" font-size="22" font-weight="650">systems of record</text>
+  <text x="600" y="674" text-anchor="middle" font-size="22" font-weight="650" fill="#F0F3F6">systems of record</text>
 
   <!-- Read path: sources are indexed into the model, which consumers traverse. -->
   <path d="M 246 344 C 304 274 361 187 433 107" fill="none" stroke="#A7AFB8" stroke-width="4" stroke-linecap="round"/>
