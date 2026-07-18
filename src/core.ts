@@ -255,8 +255,19 @@ export function defineOntology(def: OntologyDef): OntologyDef {
       if (link.kind !== 'one-to-many') {
         throw new Error(`link "${name}": viaProperty implies a foreign key on the "to" side — one-to-many only`)
       }
-      if (!Object.hasOwn(def.objects[link.to].properties, link.viaProperty)) {
+      const to = def.objects[link.to]
+      if (!Object.hasOwn(to.properties, link.viaProperty)) {
         throw new Error(`link "${name}": viaProperty "${link.viaProperty}" is not a property of ${link.to}`)
+      }
+      // The link and its property twin are one fact, so they must sit on the
+      // same side of the authority line — otherwise every consistent change
+      // would straddle it, and nothing could ever move them.
+      const propertyOwned = to.owned === true || (to.owned !== undefined && Object.hasOwn(to.owned, link.viaProperty))
+      if (Boolean(link.owned) !== propertyOwned) {
+        throw new Error(
+          `link "${name}" and its viaProperty ${link.to}.${link.viaProperty} sit on opposite sides of the ` +
+            'authority line — one fact cannot have two owners',
+        )
       }
     }
   }
@@ -790,8 +801,9 @@ export class Runtime {
 
   /**
    * Model-only validation of an edit plan — everything provable without
-   * reading current state. Runs before write-back; DB-dependent checks
-   * (merged-object schemas, link endpoints, cardinality) run at commit.
+   * reading current state. DB-dependent checks (merged-object schemas, link
+   * endpoints, cardinality, delete restrictions) live in #applyEdits, which
+   * the preflight dry-runs before write-back and the commit runs for real.
    */
   #validateEdits(edits: Edit[]): void {
     for (const edit of edits) {

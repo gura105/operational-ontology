@@ -798,6 +798,27 @@ test('indexing validates rows against the model', () => {
   )
 })
 
+test('a link and its viaProperty twin cannot sit on opposite sides of the authority line', () => {
+  assert.throws(
+    () =>
+      defineOntology({
+        name: 'bad',
+        objects: {
+          Board: defineObject({ primaryKey: 'id', properties: { id: z.string() } }),
+          Card: defineObject({
+            primaryKey: 'id',
+            properties: { id: z.string(), boardId: z.string() },
+            owned: { boardId: '' },
+          }),
+        },
+        // Source-backed link, ontology-owned property: one fact, two owners.
+        links: { boardCards: defineLink({ from: 'Board', to: 'Card', kind: 'one-to-many', viaProperty: 'boardId' }) },
+        actions: {},
+      }),
+    /opposite sides/,
+  )
+})
+
 test('indexing refuses unknown keys instead of silently stripping them', () => {
   const rt = createRuntime(ontology, new Database(':memory:'))
   assert.throws(
