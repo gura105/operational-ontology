@@ -27,14 +27,16 @@ export function integrate({ north, south }: LegacyDbs) {
   ]
 
   // Orders — unify status encodings; keep the source system so write-back
-  // knows which system of record a change belongs to.
+  // knows which system of record a change belongs to. Note what is absent:
+  // `assignee` is ontology-owned, and the runtime refuses a snapshot that
+  // tries to supply it — the integration layer never needs to know about
+  // state the sources have no authority over.
   const orders = [
     ...north.prepare('SELECT order_no, cust_cd, stat, amt FROM tbl_order').all().map((r: any) => ({
       id: `N-${r.order_no}`,
       customerId: `N-${r.cust_cd}`,
       status: NORTH_STATUS[r.stat as number],
       total: r.amt as number,
-      assignee: null,
       sourceSystem: 'north' as const,
       sourceId: r.order_no as string,
     })),
@@ -43,7 +45,6 @@ export function integrate({ north, south }: LegacyDbs) {
       customerId: `S-${r.CUST_ID}`,
       status: SOUTH_STATUS[r.ORDER_STATUS as string],
       total: r.TOTAL_AMT as number,
-      assignee: null,
       sourceSystem: 'south' as const,
       sourceId: r.ORDER_ID as string,
     })),

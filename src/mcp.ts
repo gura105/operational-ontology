@@ -16,7 +16,7 @@
  */
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js'
 import { z } from 'zod'
-import type { Runtime } from './core.js'
+import { isTargeted, type Runtime } from './core.js'
 
 export function buildMcpServer(rt: Runtime, opts: { agent?: string } = {}): McpServer {
   const server = new McpServer({ name: `operational-ontology:${rt.ontology.name}`, version: '0.1.0' })
@@ -138,7 +138,7 @@ export function buildMcpServer(rt: Runtime, opts: { agent?: string } = {}): McpS
       snake(actionName),
       {
         description:
-          `${action.description ?? `Action on ${action.object}.`} ` +
+          `${action.description ?? (isTargeted(action) ? `Action on ${action.object}.` : 'Action.')} ` +
           'Writes are gated: if a business rule rejects this call, the error is ' +
           'machine-readable ({ code, message }) and the attempt is recorded in the audit log.',
         inputSchema: action.params,

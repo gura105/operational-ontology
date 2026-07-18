@@ -7,6 +7,9 @@
  *   - objects & links are indexed from existing physical data (read side)
  *   - every write goes through an action: preconditions → effects → audit log
  *   - there is no other write path
+ *   - authority is declared in the model: source-backed state comes from the
+ *     sources and write-back governs its changes; ontology-owned state lives
+ *     here, needs no write-back, and survives re-indexing
  *
  * The ontology definition is a plain value, not a class hierarchy. The
  * runtime interprets it — which is what lets `mcp.ts` enumerate it and expose
@@ -28,6 +31,21 @@ export interface ObjectTypeDef<S extends Properties = Properties> {
    */
   properties: S
   /**
+   * Authority declaration — which of this type's state the ontology itself
+   * owns. Everything not declared here is source-backed: the indexed snapshot
+   * supplies it, and changing it requires write-back.
+   *
+   * - `owned: true` — the whole type is ontology-owned, existence included.
+   *   No source supplies its rows (`load()` refuses them); actions create,
+   *   modify, and delete them without write-back; they survive re-indexing
+   *   untouched.
+   * - `owned: { prop: default }` — these properties are ontology-owned on
+   *   otherwise source-backed rows. A loaded row must NOT supply them (the
+   *   source has no authority over them); they start at the declared default,
+   *   change only through actions, and survive re-indexing via the overlay.
+   */
+  owned?: true | Record<string, unknown>
+  /**
    * Row-level visibility, attached to the model (an optional slot). Absent
    * means visible to everyone: this reference implementation is fail-open by
    * declaration — it has no authentication, so `actor` is self-declared and
@@ -48,6 +66,22 @@ export function defineObject<S extends Properties>(def: ObjectTypeDef<S>): Objec
   if (!Object.hasOwn(def.properties, def.primaryKey)) {
     throw new Error(`primaryKey "${def.primaryKey}" is not one of the defined properties`)
   }
+  if (def.owned === true && def.source) {
+    throw new Error('an ontology-owned type has no source — drop `source` or the `owned: true`')
+  }
+  if (def.owned && def.owned !== true) {
+    for (const [key, fallback] of Object.entries(def.owned)) {
+      if (!Object.hasOwn(def.properties, key)) {
+        throw new Error(`owned property "${key}" is not one of the defined properties`)
+      }
+      if (key === def.primaryKey) {
+        throw new Error(`the primary key "${key}" cannot be ontology-owned`)
+      }
+      if (!(def.properties[key] as z.ZodType).safeParse(fallback).success) {
+        throw new Error(`default for owned property "${key}" does not satisfy its schema`)
+      }
+    }
+  }
   return def
 }
 
@@ -59,8 +93,24 @@ export interface LinkTypeDef {
    * for one-to-many, the "many" side belongs to at most one "one" side.
    */
   kind: 'one-to-many' | 'many-to-many'
+  /**
+   * Authority declaration for the link's instances. Absent means
+   * source-backed: the snapshot supplies them, rewiring them requires
+   * write-back, and re-indexing replaces them. `owned: true` means the
+   * ontology owns them: `load()` refuses them, actions rewire them without
+   * write-back, and they survive re-indexing.
+   */
+  owned?: true
   /** Physical origin of the link (a foreign key, a join table) — documentation only. */
   via?: string
+  /**
+   * For a one-to-many link mirrored by a foreign-key property on the "to"
+   * side (`Order.customerId` for customerOrders): the property's name. The
+   * link and the property are two representations of one fact, so the
+   * runtime validates they agree — at indexing time and after every edit
+   * plan. Absent for links with no property twin (join tables).
+   */
+  viaProperty?: string
   description?: string
 }
 
@@ -113,6 +163,12 @@ export interface ActionCtx<O = Record<string, unknown>, P = Record<string, unkno
   actor: string
 }
 
+/** Context for a targetless action: no existing object is the subject. */
+export interface TargetlessActionCtx<P = Record<string, unknown>> {
+  params: P
+  actor: string
+}
+
 export interface ActionDef<S extends Properties = Properties> {
   /** Object type this action operates on. */
   object: string
@@ -136,15 +192,47 @@ export interface ActionDef<S extends Properties = Properties> {
    */
   effects: (ctx: ActionCtx<any, any>) => Edit[]
   /**
-   * Route this action's edits through the write-back adapter before they are
-   * committed to the ontology store. See `WritebackAdapter`.
+   * Authority declaration for this action's changes. `writeback: true`
+   * declares them source-backed: the edit plan is routed through the
+   * write-back adapter before commit. Its absence declares them
+   * ontology-owned. The declaration is checked, not trusted — the runtime
+   * classifies every edit plan against the model's `owned` declarations and
+   * refuses a plan on the wrong side of the line (or straddling it).
    */
   writeback?: boolean
 }
 
-export function defineAction<S extends Properties>(def: ActionDef<S>): ActionDef<S> {
-  if (!Object.hasOwn(def.params, def.targetParam)) {
-    throw new Error(`targetParam "${def.targetParam}" is not one of the action's params`)
+/**
+ * An action with no pre-existing target — its whole plan is creation (plus
+ * whatever wiring the created objects need). No target means no visibility
+ * gate: there is no object whose existence could leak. Preconditions still
+ * run, and edit-plan validation still refuses links to nonexistent objects.
+ */
+export interface TargetlessActionDef<S extends Properties = Properties> {
+  params: S
+  description?: string
+  preconditions: Array<(ctx: TargetlessActionCtx<any>) => Violation | void>
+  effects: (ctx: TargetlessActionCtx<any>) => Edit[]
+  writeback?: boolean
+}
+
+export type AnyActionDef = ActionDef<any> | TargetlessActionDef<any>
+
+export function isTargeted(action: AnyActionDef): action is ActionDef<any> {
+  return 'targetParam' in action
+}
+
+export function defineAction<S extends Properties>(def: ActionDef<S>): ActionDef<S>
+export function defineAction<S extends Properties>(def: TargetlessActionDef<S>): TargetlessActionDef<S>
+export function defineAction(def: AnyActionDef): AnyActionDef {
+  if ('targetParam' in def || 'object' in def) {
+    const targeted = def as ActionDef
+    if (typeof targeted.object !== 'string' || typeof targeted.targetParam !== 'string') {
+      throw new Error('a targeted action needs both `object` and `targetParam`; a targetless action has neither')
+    }
+    if (!Object.hasOwn(targeted.params, targeted.targetParam)) {
+      throw new Error(`targetParam "${targeted.targetParam}" is not one of the action's params`)
+    }
   }
   return def
 }
@@ -153,7 +241,7 @@ export interface OntologyDef {
   name: string
   objects: Record<string, ObjectTypeDef<any>>
   links: Record<string, LinkTypeDef>
-  actions: Record<string, ActionDef<any>>
+  actions: Record<string, AnyActionDef>
 }
 
 export function defineOntology(def: OntologyDef): OntologyDef {
@@ -163,9 +251,17 @@ export function defineOntology(def: OntologyDef): OntologyDef {
         throw new Error(`link "${name}" references unknown object type "${end}"`)
       }
     }
+    if (link.viaProperty !== undefined) {
+      if (link.kind !== 'one-to-many') {
+        throw new Error(`link "${name}": viaProperty implies a foreign key on the "to" side — one-to-many only`)
+      }
+      if (!Object.hasOwn(def.objects[link.to].properties, link.viaProperty)) {
+        throw new Error(`link "${name}": viaProperty "${link.viaProperty}" is not a property of ${link.to}`)
+      }
+    }
   }
   for (const [name, action] of Object.entries(def.actions)) {
-    if (!Object.hasOwn(def.objects, action.object)) {
+    if (isTargeted(action) && !Object.hasOwn(def.objects, action.object)) {
       throw new Error(`action "${name}" references unknown object type "${action.object}"`)
     }
   }
@@ -191,6 +287,23 @@ export interface WritebackAdapter {
 }
 
 // ───────────────────────────── Runtime ─────────────────────────────
+
+/** Internal: a Violation surfacing through plan classification. */
+class PlanViolation extends Error {
+  constructor(readonly violation: Violation) {
+    super(violation.message)
+  }
+}
+
+/** Internal: the sentinel that rolls a preflight transaction back. */
+class Rollback extends Error {}
+
+const editErrorMessage = (e: unknown): string =>
+  e instanceof z.ZodError
+    ? `${e.issues[0]?.path.join('.') || 'edit'}: ${e.issues[0]?.message ?? 'invalid'}`
+    : e instanceof Error
+      ? e.message
+      : String(e)
 
 export type ActionResult = { ok: true; edits: Edit[] } | { ok: false; error: Violation }
 
@@ -240,6 +353,14 @@ export class Runtime {
         name TEXT NOT NULL, from_pk TEXT NOT NULL, to_pk TEXT NOT NULL,
         PRIMARY KEY (name, from_pk, to_pk)
       );
+      -- The edit layer for ontology-owned properties on source-backed rows:
+      -- the current effective patch per object, reapplied over a re-indexed
+      -- base. Ontology-owned types and links need no overlay — load() cannot
+      -- touch them, so they survive in place.
+      CREATE TABLE IF NOT EXISTS overlay (
+        type TEXT NOT NULL, pk TEXT NOT NULL, patch TEXT NOT NULL,
+        PRIMARY KEY (type, pk)
+      );
       CREATE TABLE IF NOT EXISTS audit_log (
         seq INTEGER PRIMARY KEY AUTOINCREMENT,
         ts TEXT NOT NULL, actor TEXT NOT NULL, action TEXT NOT NULL,
@@ -258,11 +379,16 @@ export class Runtime {
    * It is an infrastructure entry point, not a user write path — user writes
    * go through `execute`.
    *
-   * Snapshot semantics, per loaded type: replace, don't merge. Re-loading a
-   * type drops its previous rows — prior action edits to them included (a v0
-   * simplification; Foundry keeps edits in their own layer and reapplies them
-   * over the re-indexed base — see "Failure semantics" in the README). The
-   * loaded snapshot must satisfy the model's constraints, the same as edits.
+   * Snapshot semantics, per loaded type: replace the base, reapply the edit
+   * layer. A source snapshot speaks only for source-backed state: rows of an
+   * ontology-owned type, instances of an ontology-owned link, and values for
+   * ontology-owned properties are all refused — the source has no authority
+   * over them. Owned properties start at their declared defaults and get the
+   * overlay's current patch reapplied on top; owned types and links are
+   * simply left alone. An overlay patch whose base row disappeared refuses
+   * the whole load (state the ontology owns must not be dropped silently) —
+   * clear the edit or restore the row, then re-load. The result must satisfy
+   * the model's constraints, the same as edits.
    */
   load(snapshot: {
     objects?: Record<string, Record<string, unknown>[]>
@@ -275,22 +401,81 @@ export class Runtime {
         const def = this.ontology.objects[type]
         const schema = this.#schemas.get(type)
         if (!def || !schema) throw new Error(`unknown object type "${type}"`)
+        if (def.owned === true) {
+          throw new Error(`cannot load "${type}": the type is ontology-owned — no source supplies its rows`)
+        }
+        const defaults = def.owned ?? {}
         this.#db.prepare('DELETE FROM objects WHERE type = ?').run(type)
         for (const row of rows) {
-          const parsed = schema.safeParse(row)
+          // The same strictness as edits, for the same reason: a silently
+          // stripped key is an integration bug travelling without a trace.
+          const unknown = Object.keys(row).filter((key) => !Object.hasOwn(def.properties, key))
+          if (unknown.length > 0) {
+            throw new Error(
+              `invalid ${type} row: unknown propert${unknown.length > 1 ? 'ies' : 'y'} "${unknown.join('", "')}"`,
+            )
+          }
+          for (const key of Object.keys(defaults)) {
+            if (Object.hasOwn(row, key)) {
+              throw new Error(`invalid ${type} row: property "${key}" is ontology-owned — a source cannot supply it`)
+            }
+          }
+          const parsed = schema.safeParse({ ...row, ...defaults })
           if (!parsed.success) {
             throw new Error(`invalid ${type} row: ${parsed.error.issues[0]?.message ?? 'schema mismatch'}`)
           }
           insertObject.run(type, String(parsed.data[def.primaryKey]), JSON.stringify(parsed.data))
         }
+        this.#reapplyOverlay(type)
       }
       for (const [name, pairs] of Object.entries(snapshot.links ?? {})) {
-        if (!Object.hasOwn(this.ontology.links, name)) throw new Error(`unknown link type "${name}"`)
+        const link = Object.hasOwn(this.ontology.links, name) ? this.ontology.links[name] : undefined
+        if (!link) throw new Error(`unknown link type "${name}"`)
+        if (link.owned) {
+          throw new Error(`cannot load link "${name}": the link type is ontology-owned — no source supplies its instances`)
+        }
         this.#db.prepare('DELETE FROM links WHERE name = ?').run(name)
         for (const [from, to] of pairs) insertLink.run(name, from, to)
       }
       this.#validateLinks()
+      this.#validateViaProperties()
     })()
+  }
+
+  /**
+   * Reapply the edit layer over a freshly indexed base. Refusals here roll
+   * back the whole load: an orphaned patch means the source dropped a row
+   * the ontology still holds owned state for — a reconciliation decision the
+   * runtime must not make silently.
+   */
+  #reapplyOverlay(type: string): void {
+    const def = this.ontology.objects[type]!
+    const schema = this.#schemas.get(type)!
+    const ownedKeys = def.owned && def.owned !== true ? Object.keys(def.owned) : []
+    const rows = this.#db.prepare('SELECT pk, patch FROM overlay WHERE type = ?').all(type) as Array<{
+      pk: string
+      patch: string
+    }>
+    for (const { pk, patch } of rows) {
+      const changes = JSON.parse(patch) as Record<string, unknown>
+      const stale = Object.keys(changes).filter((key) => !ownedKeys.includes(key))
+      if (stale.length > 0) {
+        throw new Error(
+          `overlay for ${type}/${pk} carries "${stale.join('", "')}" which the model no longer declares ontology-owned`,
+        )
+      }
+      const base = this.#fetch<Record<string, unknown>>(type, pk)
+      if (!base) {
+        throw new Error(
+          `re-index conflict: ${type}/${pk} carries ontology-owned edits (${Object.keys(changes).join(', ')}) ` +
+            'but the re-indexed base no longer has the row — clear the edit or restore the row, then re-load',
+        )
+      }
+      const merged = schema.parse({ ...base, ...changes })
+      this.#db
+        .prepare('UPDATE objects SET data = ? WHERE type = ? AND pk = ?')
+        .run(JSON.stringify(merged), type, pk)
+    }
   }
 
   // ── Read side: query the model, not the tables — and always as someone ──
@@ -364,14 +549,28 @@ export class Runtime {
 
   /**
    * Execute an action. This is the only way state changes:
-   * validate params → load target → preconditions → effects →
-   * validate the edit plan → write-back (if configured) →
+   * validate params → load target (if the action has one) → preconditions →
+   * effects → validate the edit plan (model checks, the authority line, and
+   * a dry run of the commit) → write-back (if declared) →
    * atomically commit edits + audit entry.
    */
   execute(actionName: string, params: Record<string, unknown>, opts: { actor: string }): ActionResult {
     // Every attempt is audited — including the ones that never reach the model.
-    const refuseAs = (target: string, auditParams: Record<string, unknown>, error: Violation): ActionResult => {
-      this.#audit({ actor: opts.actor, action: actionName, target, params: auditParams, status: 'rejected', error })
+    const refuseAs = (
+      target: string,
+      auditParams: Record<string, unknown>,
+      error: Violation,
+      edits?: Edit[],
+    ): ActionResult => {
+      this.#audit({
+        actor: opts.actor,
+        action: actionName,
+        target,
+        params: auditParams,
+        status: 'rejected',
+        error,
+        edits,
+      })
       return { ok: false, error }
     }
 
@@ -385,17 +584,21 @@ export class Runtime {
     const parsed = z.object(action.params).safeParse(params)
     if (!parsed.success) {
       const issue = parsed.error.issues[0]
-      const guessed = params[action.targetParam]
+      const guessed = isTargeted(action) ? params[action.targetParam] : undefined
+      const target = isTargeted(action)
+        ? `${action.object}/${guessed != null ? String(guessed) : '(invalid)'}`
+        : '(targetless)'
       return refuseAs(
-        `${action.object}/${guessed != null ? String(guessed) : '(invalid)'}`,
+        target,
         params,
         reject('INVALID_PARAMS', `${issue?.path.join('.') ?? 'params'}: ${issue?.message ?? 'invalid'}`),
       )
     }
 
-    const pk = String(parsed.data[action.targetParam])
-    const target = `${action.object}/${pk}`
-    const refuse = (error: Violation): ActionResult => refuseAs(target, parsed.data, error)
+    const target = isTargeted(action)
+      ? `${action.object}/${String(parsed.data[action.targetParam])}`
+      : '(targetless)'
+    const refuse = (error: Violation, edits?: Edit[]): ActionResult => refuseAs(target, parsed.data, error, edits)
 
     // Crashes are attempts too, and they are audited with a code that says
     // where they happened: READ_FAILED for storage faults, RULE_CRASHED for
@@ -412,49 +615,100 @@ export class Runtime {
       throw e
     }
 
-    let object: Record<string, unknown> | undefined
-    try {
-      object = this.#fetch(action.object, pk)
-    } catch (e) {
-      crashedAs('READ_FAILED', e)
-    }
-    if (object !== undefined) {
+    let ctx: ActionCtx | TargetlessActionCtx
+    if (isTargeted(action)) {
+      const pk = String(parsed.data[action.targetParam])
+      let object: Record<string, unknown> | undefined
       try {
-        // Visibility gates action targets too: an object the actor cannot see
-        // is TARGET_NOT_FOUND — same as a missing one, so existence never leaks.
-        if (!this.#visible(action.object, object, opts.actor)) object = undefined
+        object = this.#fetch(action.object, pk)
       } catch (e) {
-        crashedAs('RULE_CRASHED', e)
+        crashedAs('READ_FAILED', e)
       }
+      if (object !== undefined) {
+        try {
+          // Visibility gates action targets too: an object the actor cannot see
+          // is TARGET_NOT_FOUND — same as a missing one, so existence never leaks.
+          if (!this.#visible(action.object, object, opts.actor)) object = undefined
+        } catch (e) {
+          crashedAs('RULE_CRASHED', e)
+        }
+      }
+      if (!object) return refuse(reject('TARGET_NOT_FOUND', `${target} does not exist`))
+      ctx = { object, params: parsed.data, actor: opts.actor }
+    } else {
+      ctx = { params: parsed.data, actor: opts.actor }
     }
-    if (!object) return refuse(reject('TARGET_NOT_FOUND', `${target} does not exist`))
-
-    const ctx: ActionCtx = { object, params: parsed.data, actor: opts.actor }
 
     let edits: Edit[] = []
     try {
       for (const precondition of action.preconditions) {
-        const violation = precondition(ctx)
+        const violation = precondition(ctx as ActionCtx)
         if (violation) return refuse(violation)
       }
-      edits = action.effects(ctx)
+      edits = action.effects(ctx as ActionCtx)
     } catch (e) {
       crashedAs('RULE_CRASHED', e)
     }
 
     // Statically invalid edits are refused before anything leaves this
     // process — the write-back adapter never sees an edit plan the model can
-    // already prove wrong. DB-dependent checks stay at commit time.
+    // already prove wrong.
     try {
       this.#validateEdits(edits)
     } catch (e) {
-      const message =
-        e instanceof z.ZodError
-          ? `${e.issues[0]?.path.join('.') || 'edit'}: ${e.issues[0]?.message ?? 'invalid'}`
-          : e instanceof Error
-            ? e.message
-            : String(e)
-      return refuse(reject('INVALID_EDITS', message))
+      return refuse(reject('INVALID_EDITS', editErrorMessage(e)))
+    }
+
+    // The authority line. `writeback` is the action's declared side of it,
+    // and the declaration is checked against what the plan actually touches:
+    // an undeclared write to source-backed state is exactly the shadow copy
+    // the fourth property forbids, whatever the action is named.
+    try {
+      const authorities = new Set(edits.map((e) => this.#editAuthority(e)).filter((a) => a !== null))
+      if (authorities.size > 1) {
+        return refuse(
+          reject(
+            'MIXED_AUTHORITY',
+            'the edit plan changes both source-backed and ontology-owned state — ' +
+              'v0.1 routes a plan whole, so split the action along the authority line',
+          ),
+        )
+      }
+      const authority = authorities.values().next().value
+      if (authority === 'source' && !action.writeback) {
+        return refuse(
+          reject(
+            'UNDECLARED_SOURCE_WRITE',
+            'the edit plan changes source-backed state but the action does not declare `writeback: true` — ' +
+              'a local change to source truth that never travels home is a shadow copy',
+          ),
+        )
+      }
+      if (authority === 'ontology' && action.writeback) {
+        return refuse(
+          reject(
+            'MISDECLARED_WRITEBACK',
+            'the action declares `writeback: true` but the edit plan changes only ontology-owned state — ' +
+              'nothing in it belongs to a source',
+          ),
+        )
+      }
+    } catch (e) {
+      if (e instanceof PlanViolation) return refuse(e.violation)
+      throw e
+    }
+
+    // Dry-run the commit before anything leaves this process: the same code
+    // that will apply the plan applies it inside a transaction that is
+    // always rolled back. Everything the commit would check — link
+    // endpoints, cardinality, delete restrictions, merged schemas — is
+    // checked here first, so the write-back adapter never sees a plan the
+    // ontology store would refuse. (Single-writer, synchronous: nothing can
+    // change between this dry run and the commit below.)
+    try {
+      this.#preflight(edits)
+    } catch (e) {
+      return refuse(reject('INVALID_EDITS', editErrorMessage(e)))
     }
 
     if (action.writeback) {
@@ -465,7 +719,11 @@ export class Runtime {
         // Write-back first: if the system of record refuses, nothing changes here.
         this.#writeback.apply(edits, { action: actionName, actor: opts.actor })
       } catch (e) {
-        return refuse(reject('WRITEBACK_FAILED', e instanceof Error ? e.message : String(e)))
+        // The adapter may have partially applied the plan before throwing —
+        // source-side atomicity is the adapter's contract, not this
+        // runtime's. The full plan goes on the record as the raw material
+        // for reconciliation.
+        return refuse(reject('WRITEBACK_FAILED', e instanceof Error ? e.message : String(e)), edits)
       }
     }
 
@@ -571,6 +829,57 @@ export class Runtime {
     }
   }
 
+  /**
+   * Which side of the authority line an edit falls on, per the model's
+   * `owned` declarations. `null` for a no-op modify. Throws PlanViolation
+   * for an edit no side can legally hold.
+   */
+  #editAuthority(edit: Edit): 'source' | 'ontology' | null {
+    if (edit.op === 'link' || edit.op === 'unlink') {
+      return this.ontology.links[edit.link]?.owned ? 'ontology' : 'source'
+    }
+    const def = this.#objectDef(edit.object)
+    if (def.owned === true) return 'ontology'
+    if (edit.op === 'create') {
+      throw new PlanViolation(
+        reject(
+          'SOURCE_CREATE_UNSUPPORTED',
+          `cannot create ${edit.object}/${edit.pk}: the type is source-backed, and v0.1 supports creation ` +
+            'for ontology-owned types only — creating at the source is undemonstrated, so undeclared',
+        ),
+      )
+    }
+    if (edit.op === 'delete') return 'source'
+    const ownedKeys = def.owned ? Object.keys(def.owned) : []
+    const touched = Object.keys(edit.changes)
+    if (touched.length === 0) return null
+    const owned = touched.filter((key) => ownedKeys.includes(key))
+    if (owned.length === 0) return 'source'
+    if (owned.length === touched.length) return 'ontology'
+    throw new PlanViolation(
+      reject(
+        'MIXED_AUTHORITY',
+        `edit on ${edit.object}/${edit.pk} changes source-backed and ontology-owned properties together — split it`,
+      ),
+    )
+  }
+
+  /**
+   * The dry run behind the write-back guarantee: the exact code that will
+   * commit the plan applies it inside a transaction that always rolls back.
+   * No second validator to drift out of sync with the real one.
+   */
+  #preflight(edits: Edit[]): void {
+    try {
+      this.#db.transaction(() => {
+        this.#applyEdits(edits)
+        throw new Rollback('preflight')
+      })()
+    } catch (e) {
+      if (!(e instanceof Rollback)) throw e
+    }
+  }
+
   /** Raw fetch without visibility — for internal integrity checks only. */
   #fetch<O = Record<string, unknown>>(type: string, pk: string): O | undefined {
     this.#objectDef(type)
@@ -628,6 +937,28 @@ export class Runtime {
         this.#db
           .prepare('UPDATE objects SET data = ? WHERE type = ? AND pk = ?')
           .run(JSON.stringify(next), edit.object, edit.pk)
+        // Ontology-owned changes on a source-backed row also land in the
+        // overlay — the layer load() reapplies over a re-indexed base. A
+        // value back at its declared default is pruned, so clearing an edit
+        // clears the survival obligation with it.
+        if (def.owned && def.owned !== true && this.#editAuthority(edit) === 'ontology') {
+          const row = this.#db
+            .prepare('SELECT patch FROM overlay WHERE type = ? AND pk = ?')
+            .get(edit.object, edit.pk) as { patch: string } | undefined
+          const patch: Record<string, unknown> = { ...(row ? JSON.parse(row.patch) : {}), ...edit.changes }
+          for (const [key, fallback] of Object.entries(def.owned)) {
+            if (Object.hasOwn(patch, key) && JSON.stringify(patch[key]) === JSON.stringify(fallback)) {
+              delete patch[key]
+            }
+          }
+          if (Object.keys(patch).length === 0) {
+            this.#db.prepare('DELETE FROM overlay WHERE type = ? AND pk = ?').run(edit.object, edit.pk)
+          } else {
+            this.#db
+              .prepare('INSERT OR REPLACE INTO overlay (type, pk, patch) VALUES (?, ?, ?)')
+              .run(edit.object, edit.pk, JSON.stringify(patch))
+          }
+        }
       } else if (edit.op === 'create') {
         const data = schema.parse(edit.data)
         if (String(data[def.primaryKey]) !== edit.pk) {
@@ -657,8 +988,12 @@ export class Runtime {
           }
         }
         this.#db.prepare('DELETE FROM objects WHERE type = ? AND pk = ?').run(edit.object, edit.pk)
+        // The row's owned state goes with the row — a later re-index of the
+        // type must not resurrect an orphaned patch.
+        this.#db.prepare('DELETE FROM overlay WHERE type = ? AND pk = ?').run(edit.object, edit.pk)
       }
     }
+    this.#validateViaProperties()
   }
 
   /** The indexed snapshot must satisfy the model's constraints, same as edits do. */
@@ -681,6 +1016,39 @@ export class Runtime {
             )
           }
           parentOf.set(to_pk, from_pk)
+        }
+      }
+    }
+  }
+
+  /**
+   * A link with a viaProperty and its foreign-key property twin are two
+   * representations of one fact, and they must agree — after indexing and
+   * after every edit plan. Full scan by declaration: keeping this fast is
+   * indexing infrastructure, which is an implementation concern, not part
+   * of the pattern.
+   */
+  #validateViaProperties(): void {
+    for (const [name, link] of Object.entries(this.ontology.links)) {
+      if (!link.viaProperty) continue
+      const parentOf = new Map<string, string>()
+      const linkRows = this.#db
+        .prepare('SELECT from_pk, to_pk FROM links WHERE name = ?')
+        .all(name) as Array<{ from_pk: string; to_pk: string }>
+      for (const { from_pk, to_pk } of linkRows) parentOf.set(to_pk, from_pk)
+      const objectRows = this.#db
+        .prepare('SELECT pk, data FROM objects WHERE type = ?')
+        .all(link.to) as Array<{ pk: string; data: string }>
+      for (const { pk, data } of objectRows) {
+        const raw = (JSON.parse(data) as Record<string, unknown>)[link.viaProperty]
+        const value = raw == null ? null : String(raw)
+        const linked = parentOf.get(pk) ?? null
+        if (value !== linked) {
+          throw new Error(
+            `link "${name}" disagrees with ${link.to}.${link.viaProperty} for ${link.to}/${pk}: ` +
+              `the property says ${value === null ? 'none' : `"${value}"`}, ` +
+              `the links say ${linked === null ? 'none' : `"${linked}"`}`,
+          )
         }
       }
     }

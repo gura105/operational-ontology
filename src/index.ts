@@ -11,12 +11,16 @@ export {
   remove,
   link,
   unlink,
+  isTargeted,
 } from './core.js'
 export type {
   ObjectTypeDef,
   LinkTypeDef,
   ActionDef,
+  TargetlessActionDef,
+  AnyActionDef,
   ActionCtx,
+  TargetlessActionCtx,
   OntologyDef,
   Violation,
   Edit,

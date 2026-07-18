@@ -34,18 +34,24 @@ test('the tool surface is generated from the model — and contains no raw data 
   const tools = (await client.listTools()).tools.map((t) => t.name).sort()
   assert.deepEqual(tools, [
     'aggregate_customer',
+    'aggregate_note',
     'aggregate_order',
     'aggregate_product',
     'assign_order',
+    'attach_note',
     'cancel_order',
+    'file_note',
     'get_customer',
+    'get_note',
     'get_order',
     'get_product',
     'read_audit_log',
     'search_customer',
+    'search_note',
     'search_order',
     'search_product',
     'traverse_customer_orders',
+    'traverse_order_notes',
     'traverse_order_products',
   ])
   for (const name of tools) {
@@ -149,6 +155,28 @@ test('wrapped numeric properties (nullable/optional/defaulted/stacked) are still
     assert.equal(groups.a.count, 2)
     assert.equal(groups.a.sum, expected)
   }
+})
+
+test('a targetless agent write creates ontology-owned state that survives re-indexing', async () => {
+  const { client, rt, legacy } = await connectedClient()
+  const filed = await client.callTool({
+    name: 'file_note',
+    arguments: { noteId: 'NOTE-1', text: 'audit the north orders', author: 'agent-ops' },
+  })
+  assert.notEqual(filed.isError, true)
+  const attached = await client.callTool({
+    name: 'attach_note',
+    arguments: { orderId: 'N-A-1002', noteId: 'NOTE-1' },
+  })
+  assert.notEqual(attached.isError, true)
+  // The pipeline runs again over the live legacy systems.
+  rt.load(integrate(legacy))
+  const traverse = await client.callTool({
+    name: 'traverse_order_notes',
+    arguments: { pk: 'N-A-1002', direction: 'forward' },
+  })
+  const notes = JSON.parse((traverse.content as any)[0].text)
+  assert.deepEqual(notes.map((n: any) => n.id), ['NOTE-1'])
 })
 
 test('an allowed agent write lands, is audited, and reaches the system of record', async () => {

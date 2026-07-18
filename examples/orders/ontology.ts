@@ -4,7 +4,7 @@
  * with the business rules attached to the verbs.
  */
 import { z } from 'zod'
-import { defineAction, defineLink, defineObject, defineOntology, modify, reject } from '../../src/core.js'
+import { create, defineAction, defineLink, defineObject, defineOntology, link, modify, reject } from '../../src/core.js'
 
 export const orders = defineOntology({
   name: 'orders',
@@ -44,6 +44,11 @@ export const orders = defineOntology({
         sourceSystem: z.enum(['north', 'south']),
         sourceId: z.string(),
       },
+      // Authority, declared property by property: neither legacy system has
+      // an assignee column, so the ontology owns it — it starts null, no
+      // snapshot may supply it, and it survives re-indexing. Every other
+      // property is source-backed: the snapshot speaks, write-back governs.
+      owned: { assignee: null },
       source: 'north.tbl_order ∪ south.SALES_ORDER',
     }),
 
@@ -57,6 +62,19 @@ export const orders = defineOntology({
       },
       source: 'south.ITEM_MASTER',
     }),
+
+    Note: defineObject({
+      description: 'A triage note — state no source system has a table for',
+      primaryKey: 'id',
+      // The whole type is ontology-owned, existence included: no source
+      // supplies notes, actions create them, and they survive re-indexing.
+      owned: true,
+      properties: {
+        id: z.string(),
+        text: z.string(),
+        author: z.string(),
+      },
+    }),
   },
 
   links: {
@@ -65,12 +83,23 @@ export const orders = defineOntology({
       to: 'Order',
       kind: 'one-to-many',
       via: 'foreign key (orders.customerId)',
+      // The link mirrors Order.customerId — one fact, two representations,
+      // and the runtime keeps them agreeing.
+      viaProperty: 'customerId',
     }),
     orderProducts: defineLink({
       from: 'Order',
       to: 'Product',
       kind: 'many-to-many',
       via: 'join tables (north.tbl_order_line ∪ south.ORDER_LINE)',
+    }),
+    orderNotes: defineLink({
+      from: 'Order',
+      to: 'Note',
+      kind: 'one-to-many',
+      // Ontology-owned, like the notes themselves: no source supplies these
+      // links, and they survive re-indexing.
+      owned: true,
     }),
   },
 
@@ -125,6 +154,47 @@ export const orders = defineOntology({
             : undefined,
       ],
       effects: ({ object, params }) => [modify('Order', object.id as string, { assignee: params.assignee })],
+    }),
+
+    /**
+     * A targetless action: no pre-existing object is the subject — its whole
+     * plan is creation. Notes are ontology-owned, so no write-back; the
+     * caller supplies the id (see "What if an agent retries?" in the README —
+     * an invocation-supplied id is also the minimal idempotency hook).
+     */
+    fileNote: defineAction({
+      description: 'File a free-standing triage note.',
+      params: {
+        noteId: z.string().min(1),
+        text: z.string().min(1),
+        author: z.string().min(1),
+      },
+      preconditions: [],
+      effects: ({ params }) => [
+        create('Note', params.noteId as string, {
+          id: params.noteId,
+          text: params.text,
+          author: params.author,
+        }),
+      ],
+    }),
+
+    /**
+     * Rewires the ontology-owned part of the graph: attaching a note to an
+     * order is a link edit, gated like every other write — the order must
+     * exist and be visible to the actor, the note must exist, and the
+     * one-to-many cardinality of orderNotes is enforced at the gate.
+     */
+    attachNote: defineAction({
+      description: 'Attach an existing note to an order.',
+      object: 'Order',
+      targetParam: 'orderId',
+      params: {
+        orderId: z.string(),
+        noteId: z.string(),
+      },
+      preconditions: [],
+      effects: ({ object, params }) => [link('orderNotes', object.id as string, params.noteId as string)],
     }),
   },
 })
