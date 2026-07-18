@@ -1,0 +1,65 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1200 760" role="img" aria-labelledby="title desc">
+  <title id="title">Operational Ontology</title>
+  <desc id="desc">Reads travel from a shared model to agents, apps, and people. Writes enter through an audited action gate and write back to the systems of record that own the state.</desc>
+
+  <defs>
+    <style>
+      text {
+        font-family: system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", Helvetica, Arial, sans-serif;
+        fill: #F0F3F6;
+      }
+    </style>
+  </defs>
+
+  <rect width="1200" height="760" fill="#0D1117"/>
+
+  <!-- The ontology is a shared layer above state owned elsewhere. -->
+  <rect x="54" y="214" width="1092" height="324" rx="44" fill="#0D1117" stroke="#D0D7DE" stroke-width="3"/>
+  <text x="600" y="269" text-anchor="middle" font-size="25" font-weight="760" letter-spacing="1.5">OPERATIONAL ONTOLOGY</text>
+
+  <!-- Consumers -->
+  <rect x="430" y="54" width="340" height="88" rx="20" fill="#161B22" stroke="#8C959F" stroke-width="2.5"/>
+  <text x="600" y="106" text-anchor="middle" font-size="23" font-weight="700">agents · apps · people</text>
+
+  <!-- Shared model -->
+  <rect x="108" y="344" width="276" height="126" rx="24" fill="#161B22" stroke="#A7AFB8" stroke-width="2.5"/>
+  <text x="246" y="402" text-anchor="middle" font-size="22" font-weight="700">shared model</text>
+  <text x="246" y="431" text-anchor="middle" font-size="19" font-weight="500">objects · links</text>
+
+  <!-- Governed action gate -->
+  <path d="M 925 334 L 1048 407 L 925 480 L 802 407 Z" fill="#2A2116" stroke="#F2A63A" stroke-width="3" stroke-linejoin="round"/>
+  <text x="925" y="402" text-anchor="middle" font-size="22" font-weight="750">action gate</text>
+  <text x="925" y="431" text-anchor="middle" font-size="19" font-weight="600">rules · audit</text>
+
+  <!-- Litmus question -->
+  <text x="600" y="399" text-anchor="middle" font-size="20" font-style="italic" font-weight="500" fill="#8C959F">“Can you cancel an order</text>
+  <text x="600" y="427" text-anchor="middle" font-size="20" font-style="italic" font-weight="500" fill="#8C959F">from your semantic layer?”</text>
+
+  <!-- System of record: the declared home of source-backed state. -->
+  <rect x="432" y="628" width="336" height="76" rx="5" fill="#161B22" stroke="#8C959F" stroke-width="2.5"/>
+  <text x="600" y="674" text-anchor="middle" font-size="22" font-weight="650">systems of record</text>
+
+  <!-- Read path: sources are indexed into the model, which consumers traverse. -->
+  <path d="M 246 344 C 304 274 361 187 433 107" fill="none" stroke="#A7AFB8" stroke-width="4" stroke-linecap="round"/>
+  <path d="M 433 107 L 429 121 L 420 113 Z" fill="#A7AFB8"/>
+  <path d="M 432 666 C 371 634 305 551 246 470" fill="none" stroke="#707984" stroke-width="3.5" stroke-linecap="round" stroke-dasharray="10 12"/>
+  <path d="M 246 470 L 259 477 L 249 484 Z" fill="#707984"/>
+
+  <!-- Write path: a decision enters the gate; the governed result returns home. -->
+  <path d="M 767 107 C 823 174 874 244 925 334" fill="none" stroke="#A7AFB8" stroke-width="4" stroke-linecap="round"/>
+  <path d="M 925 334 L 913 326 L 924 320 Z" fill="#A7AFB8"/>
+  <path d="M 925 480 C 911 544 855 620 768 666" fill="none" stroke="#F2A63A" stroke-width="5.5" stroke-linecap="round"/>
+  <path d="M 768 666 L 778 653 L 785 665 Z" fill="#F2A63A"/>
+
+  <!-- Route labels use simple knockouts for reliable rendering at README size. -->
+  <rect x="340" y="164" width="62" height="30" rx="6" fill="#0D1117"/>
+  <rect x="742" y="164" width="205" height="30" rx="6" fill="#0D1117"/>
+  <rect x="270" y="564" width="150" height="30" rx="6" fill="#0D1117"/>
+  <rect x="806" y="564" width="125" height="30" rx="6" fill="#0D1117"/>
+  <text x="371" y="186" text-anchor="middle" font-size="18" font-weight="600" fill="#A7AFB8">read</text>
+  <text x="844" y="186" text-anchor="middle" font-size="18" font-style="italic" font-weight="500" fill="#A7AFB8">a write is a decision</text>
+  <text x="345" y="586" text-anchor="middle" font-size="17" font-style="italic" font-weight="500" fill="#8C959F">indexed / synced</text>
+  <text x="868" y="586" text-anchor="middle" font-size="19" font-weight="750" fill="#F2A63A">write-back</text>
+
+  <text x="1150" y="738" text-anchor="end" font-size="16" font-weight="500" fill="#8C959F">github.com/gura105/operational-ontology</text>
+</svg>
