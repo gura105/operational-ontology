@@ -99,7 +99,7 @@ The MCP tool surface is generated from the model: `search_order`, `traverse_cust
 
 Reads are scoped the same way. Every query runs as an actor — the identity on whose behalf the call is made — and visibility policies attached to the model decide which objects that actor can see. Agent sessions are no exception; the audit log is the one declared exception, an unscoped administrative view. Over stdio all callers collapse into one actor. `OO_AGENT=<name> pnpm mcp` names that actor, which is labeling, not authentication.
 
-https://github.com/user-attachments/assets/3ddfdd1d-b455-48bc-8c65-7ea74f974855
+https://github.com/user-attachments/assets/28327062-e09f-4103-943e-434a0e55b327
 
 **Business rules live in the ontology, not in the prompt.**
 

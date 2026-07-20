@@ -99,7 +99,7 @@ MCP のツール群はモデルから生成されます。`search_order`、`trav
 
 読み取りも同じ方法でスコープされます。すべてのクエリは actor（その呼び出しが誰の代理として行われるかを示す identity）として実行され、モデルに付いた可視性ポリシーが、その actor に見えるオブジェクトを決めます。エージェントのセッションも例外ではありません。唯一の宣言された例外は監査ログで、これは無スコープの管理者向けビューです。なお stdio 経由では、すべての呼び出し元が 1 つの actor にまとめられます。`OO_AGENT=<name> pnpm mcp` でその actor に名前を付けられますが、これはラベリングであって認証ではありません。
 
-https://github.com/user-attachments/assets/3ddfdd1d-b455-48bc-8c65-7ea74f974855
+https://github.com/user-attachments/assets/2b811ee7-bff2-4694-b3bf-bf0f6ccc85d5
 
 **業務ルールはプロンプトではなく、オントロジーに宿ります。**
 
