@@ -12,7 +12,10 @@ import { integrate } from './integrate.js'
 import { orders } from './ontology.js'
 import { createErpAdapter } from './erp-adapter.js'
 
-const h = (title: string) => console.log(`\n━━ ${title} ${'━'.repeat(Math.max(0, 60 - title.length))}`)
+// OO_DEMO_PACE=<ms> pauses before each section so terminal recordings stay readable
+const pace = Number(process.env.OO_DEMO_PACE ?? 0)
+const pause = () => { if (pace) Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, pace) }
+const h = (title: string) => { pause(); console.log(`\n━━ ${title} ${'━'.repeat(Math.max(0, 60 - title.length))}`) }
 
 // ── 1. The physical layer exists first ──────────────────────────────────
 h('1. Physical data (before any ontology)')
@@ -95,4 +98,5 @@ for (const e of rt.auditLog()) {
   console.log(`  #${e.seq} ${e.status.padEnd(8)} ${e.action}(${e.target}) by ${e.actor}${e.error ? ` — ${e.error.code}` : ''}`)
 }
 
+pause()
 console.log('\nThe business rule lives in the ontology, not in the prompt.')

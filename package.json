@@ -7,6 +7,7 @@
   "scripts": {
     "demo": "tsx examples/orders/demo.ts",
     "mcp": "tsx examples/orders/mcp-server.ts",
+    "agent": "claude --strict-mcp-config --mcp-config=.mcp.json",
     "test": "tsx --test tests/*.test.ts",
     "typecheck": "tsc --noEmit"
   },
