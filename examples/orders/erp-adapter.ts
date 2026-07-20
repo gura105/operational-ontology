@@ -1,30 +1,34 @@
 /**
- * Write-back adapter for the two legacy systems. Routes each Order edit to
- * the system of record it came from, translating back into that system's
+ * Write-back adapter for the two legacy systems. Routes the status change to
+ * the system of record the target order came from — `meta.target` carries
+ * the order as the runtime loaded it — translating back into that system's
  * own encoding (integer codes for north, text statuses for south).
  *
  * Runs BEFORE the ontology store commits (write-back-first ordering): if the
  * system of record refuses the change, the ontology does not change either.
+ * An edit this adapter does not know how to write back is an error, not a
+ * shrug — silently skipping one would strand the change locally, the shadow
+ * copy the fourth property forbids.
  */
 import type { Edit, WritebackAdapter } from '../../src/core.js'
 import type { LegacyDbs } from './fixtures.js'
 
 const NORTH_CODE: Record<string, number> = { pending: 0, shipped: 1, cancelled: 2 }
 
-export function createErpAdapter(
-  dbs: LegacyDbs,
-  lookupOrder: (pk: string) => { sourceSystem: string; sourceId: string } | undefined,
-): WritebackAdapter {
+export function createErpAdapter(dbs: LegacyDbs): WritebackAdapter {
   return {
     name: 'legacy-erp',
-    apply(edits: Edit[]) {
+    apply(edits: Edit[], meta) {
       for (const edit of edits) {
-        if (edit.op !== 'modify' || edit.object !== 'Order') continue
+        if (edit.op !== 'modify' || edit.object !== 'Order' || edit.pk !== meta.target.pk) {
+          throw new Error(`legacy-erp cannot write back ${edit.op} on ${'object' in edit ? edit.object : edit.link}`)
+        }
         const status = edit.changes.status as string | undefined
-        if (!status) continue // only status changes exist in the legacy schemas
+        if (!status || Object.keys(edit.changes).length !== 1) {
+          throw new Error('legacy-erp can only write back Order.status changes')
+        }
 
-        const order = lookupOrder(edit.pk)
-        if (!order) throw new Error(`order ${edit.pk} not found in the ontology store`)
+        const order = meta.target.object as { sourceSystem: string; sourceId: string }
 
         // The system of record re-verifies its own invariant on cancellation:
         // a guarded UPDATE lets the ERP refuse a stale cancel even when the

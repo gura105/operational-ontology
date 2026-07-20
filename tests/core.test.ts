@@ -17,7 +17,6 @@ import {
   link,
   modify,
   reject,
-  remove,
   unlink,
   type WritebackAdapter,
 } from '../src/core.js'
@@ -33,7 +32,6 @@ const ontology = defineOntology({
       primaryKey: 'id',
       properties: {
         id: z.string(),
-        customerId: z.string(),
         status: z.enum(['pending', 'shipped', 'cancelled']),
         total: z.number(),
         assignee: z.string().nullable(),
@@ -50,12 +48,7 @@ const ontology = defineOntology({
     }),
   },
   links: {
-    customerOrders: defineLink({
-      from: 'Customer',
-      to: 'Order',
-      kind: 'one-to-many',
-      viaProperty: 'customerId',
-    }),
+    customerOrders: defineLink({ from: 'Customer', to: 'Order', kind: 'one-to-many' }),
     orderTasks: defineLink({ from: 'Order', to: 'Task', kind: 'one-to-many', owned: true }),
   },
   actions: {
@@ -81,11 +74,11 @@ const ontology = defineOntology({
       effects: ({ object, params }) => [modify('Order', object.id as string, { assignee: params.assignee })],
     }),
     reassignOrder: defineAction({
-      // Rewires the graph itself: unlink + link + modify, atomically. The FK
-      // and its link twin are both source-backed, so the plan declares it.
+      // Rewires the graph itself: unlink + link, atomically. The link is
+      // source-backed, so the plan declares write-back.
       object: 'Order',
       targetParam: 'orderId',
-      params: { orderId: z.string(), toCustomerId: z.string() },
+      params: { orderId: z.string(), fromCustomerId: z.string(), toCustomerId: z.string() },
       preconditions: [
         ({ object }) =>
           object.status === 'shipped'
@@ -93,9 +86,8 @@ const ontology = defineOntology({
             : undefined,
       ],
       effects: ({ object, params }) => [
-        unlink('customerOrders', object.customerId as string, object.id as string),
+        unlink('customerOrders', params.fromCustomerId as string, object.id as string),
         link('customerOrders', params.toCustomerId as string, object.id as string),
-        modify('Order', object.id as string, { customerId: params.toCustomerId }),
       ],
       writeback: true,
     }),
@@ -108,16 +100,6 @@ const ontology = defineOntology({
       effects: ({ object, params }) => [
         link('customerOrders', params.toCustomerId as string, object.id as string),
       ],
-      writeback: true,
-    }),
-    driftFk: defineAction({
-      // Moves the FK property without moving the link — the two
-      // representations of one fact would disagree.
-      object: 'Order',
-      targetParam: 'orderId',
-      params: { orderId: z.string(), toCustomerId: z.string() },
-      preconditions: [],
-      effects: ({ object, params }) => [modify('Order', object.id as string, { customerId: params.toCustomerId })],
       writeback: true,
     }),
     sneakyCancel: defineAction({
@@ -161,14 +143,12 @@ const ontology = defineOntology({
     }),
     conjureSource: defineAction({
       // A schema-valid creation of a source-backed object — undemonstrated
-      // territory in v0.1, so refused by declaration.
+      // territory, so refused by declaration.
       object: 'Order',
       targetParam: 'orderId',
       params: { orderId: z.string() },
       preconditions: [],
-      effects: () => [
-        create('Order', 'N1', { id: 'N1', customerId: 'C1', status: 'pending', total: 1, assignee: null }),
-      ],
+      effects: () => [create('Order', 'N1', { id: 'N1', status: 'pending', total: 1, assignee: null })],
       writeback: true,
     }),
     corruptOrder: defineAction({
@@ -195,9 +175,7 @@ const ontology = defineOntology({
       targetParam: 'orderId',
       params: { orderId: z.string() },
       preconditions: [],
-      effects: () => [
-        create('Order', 'N1', { id: 'N1', customerId: 'C1', status: 'pending', total: 1, ghost: true }),
-      ],
+      effects: () => [create('Order', 'N1', { id: 'N1', status: 'pending', total: 1, ghost: true })],
       writeback: true,
     }),
     protoOrder: defineAction({
@@ -209,26 +187,6 @@ const ontology = defineOntology({
       effects: ({ object }) => [modify('Order', object.id as string, { toString: 'gotcha' })],
       writeback: true,
     }),
-    purgeOrder: defineAction({
-      // Deletes without unlinking — the RESTRICT rule must catch it.
-      object: 'Order',
-      targetParam: 'orderId',
-      params: { orderId: z.string() },
-      preconditions: [],
-      effects: ({ object }) => [remove('Order', object.id as string)],
-      writeback: true,
-    }),
-    scrapOrder: defineAction({
-      object: 'Order',
-      targetParam: 'orderId',
-      params: { orderId: z.string() },
-      preconditions: [],
-      effects: ({ object }) => [
-        unlink('customerOrders', object.customerId as string, object.id as string),
-        remove('Order', object.id as string),
-      ],
-      writeback: true,
-    }),
     hollowModify: defineAction({
       // A modify that changes nothing — not an edit, refused.
       object: 'Order',
@@ -236,21 +194,6 @@ const ontology = defineOntology({
       params: { orderId: z.string() },
       preconditions: [],
       effects: ({ object }) => [modify('Order', object.id as string, {})],
-    }),
-    sneakyTargetless: defineAction({
-      // Targetless, but the plan touches a pre-existing object.
-      params: { orderId: z.string() },
-      preconditions: [],
-      effects: ({ params }) => [modify('Order', params.orderId as string, { assignee: 'ghost' })],
-    }),
-    graftTask: defineAction({
-      // Targetless create wired to a pre-existing endpoint.
-      params: { taskId: z.string(), orderId: z.string() },
-      preconditions: [],
-      effects: ({ params }) => [
-        create('Task', params.taskId as string, { id: params.taskId, title: 'grafted' }),
-        link('orderTasks', params.orderId as string, params.taskId as string),
-      ],
     }),
     idleWriteback: defineAction({
       // Declares write-back but produces an empty plan — nothing to route.
@@ -288,9 +231,7 @@ const ontology = defineOntology({
       targetParam: 'orderId',
       params: { orderId: z.string() },
       preconditions: [],
-      effects: () => [
-        create('Order', 'CLAIMED', { id: 'ACTUAL', customerId: 'C1', status: 'pending', total: 1, assignee: null }),
-      ],
+      effects: () => [create('Order', 'CLAIMED', { id: 'ACTUAL', status: 'pending', total: 1, assignee: null })],
     }),
     mangleId: defineAction({
       // Tries to rewrite the primary key — the runtime must refuse.
@@ -301,26 +242,15 @@ const ontology = defineOntology({
       effects: ({ object }) => [modify('Order', object.id as string, { id: 'HIJACKED' })],
     }),
     openTask: defineAction({
-      // Targetless: no pre-existing object is the subject.
-      params: { taskId: z.string().min(1), title: z.string().min(1) },
-      preconditions: [],
-      effects: ({ params }) => [create('Task', params.taskId as string, { id: params.taskId, title: params.title })],
-    }),
-    attachTask: defineAction({
+      // Creates an ontology-owned object and wires it to its order in one
+      // atomic plan, behind the order's gate.
       object: 'Order',
       targetParam: 'orderId',
-      params: { orderId: z.string(), taskId: z.string() },
-      preconditions: [],
-      effects: ({ object, params }) => [link('orderTasks', object.id as string, params.taskId as string)],
-    }),
-    scrapTask: defineAction({
-      object: 'Order',
-      targetParam: 'orderId',
-      params: { orderId: z.string(), taskId: z.string() },
+      params: { orderId: z.string(), taskId: z.string().min(1), title: z.string().min(1) },
       preconditions: [],
       effects: ({ object, params }) => [
-        unlink('orderTasks', object.id as string, params.taskId as string),
-        remove('Task', params.taskId as string),
+        create('Task', params.taskId as string, { id: params.taskId, title: params.title }),
+        link('orderTasks', object.id as string, params.taskId as string),
       ],
     }),
   },
@@ -333,8 +263,8 @@ const SNAPSHOT = {
       { id: 'C2', name: 'Sato' },
     ],
     Order: [
-      { id: 'O1', customerId: 'C1', status: 'shipped', total: 100 },
-      { id: 'O2', customerId: 'C1', status: 'pending', total: 200 },
+      { id: 'O1', status: 'shipped', total: 100 },
+      { id: 'O2', status: 'pending', total: 200 },
     ],
   },
   links: { customerOrders: [['C1', 'O1'], ['C1', 'O2']] as Array<[string, string]> },
@@ -411,6 +341,23 @@ test('attempts that never reach the model are audited too', () => {
   assert.equal(rejected[1].target, 'Order/O2')
 })
 
+test('params the audit log cannot hold are refused — and still audited', () => {
+  const rt = setup()
+  // A BigInt survives no JSON round trip: the params are refused before the
+  // model runs, and the audit write records a placeholder instead of crashing.
+  const result = rt.execute('cancelOrder', { orderId: 'O2', reason: 10n }, { actor: 'test' })
+  assert.equal(result.ok, false)
+  if (!result.ok) assert.equal(result.error.code, 'INVALID_PARAMS')
+  // The same holds on the path that never finds an action.
+  const unknown = rt.execute('dropAllTables', { n: 10n }, { actor: 'test' })
+  assert.equal(unknown.ok, false)
+  if (!unknown.ok) assert.equal(unknown.error.code, 'UNKNOWN_ACTION')
+  const rejected = rt.auditLog({ status: 'rejected' })
+  assert.deepEqual(rejected.map((e) => e.error?.code), ['INVALID_PARAMS', 'UNKNOWN_ACTION'])
+  assert.deepEqual(rejected[0].params, { $unserializable: '[object Object]' })
+  assert.equal(rt.get<{ status: string }>('Order', 'O2', asTest)!.status, 'pending')
+})
+
 test('write-back-first ordering: adapter failure blocks the ontology edit', () => {
   const calls: string[] = []
   const failing: WritebackAdapter = {
@@ -432,6 +379,33 @@ test('write-back-first ordering: adapter failure blocks the ontology edit', () =
   const rejected = rt.auditLog({ status: 'rejected' })[0]
   assert.equal(rejected?.error?.code, 'WRITEBACK_FAILED')
   assert.deepEqual(rejected?.edits, [{ op: 'modify', object: 'Order', pk: 'O2', changes: { status: 'cancelled' } }])
+})
+
+test('an action that requires write-back refuses without an adapter', () => {
+  const rt = createRuntime(ontology, new Database(':memory:')) // no adapter configured
+  rt.load(SNAPSHOT)
+  const result = rt.execute('cancelOrder', { orderId: 'O2', reason: 'duplicate' }, { actor: 'test' })
+  assert.equal(result.ok, false)
+  if (!result.ok) assert.equal(result.error.code, 'NO_WRITEBACK_ADAPTER')
+  assert.equal(rt.get<{ status: string }>('Order', 'O2', asTest)!.status, 'pending')
+  assert.equal(rt.auditLog({ status: 'rejected' })[0]?.error?.code, 'NO_WRITEBACK_ADAPTER')
+})
+
+test('the adapter receives its routing material: the target as the runtime loaded it', () => {
+  let seen: { type: string; pk: string; object: Record<string, unknown> } | undefined
+  const probe: WritebackAdapter = {
+    name: 'probe',
+    apply: (_edits, meta) => {
+      seen = meta.target
+    },
+  }
+  const rt = setup(probe)
+  assert.equal(rt.execute('cancelOrder', { orderId: 'O2', reason: 'x' }, { actor: 'test' }).ok, true)
+  assert.deepEqual(seen, {
+    type: 'Order',
+    pk: 'O2',
+    object: { id: 'O2', status: 'pending', total: 200, assignee: null }, // pre-edit state
+  })
 })
 
 test('statically invalid edits are refused before the adapter ever runs', () => {
@@ -474,7 +448,11 @@ test('DB-dependent violations are ALSO refused before the adapter runs (prefligh
   const rt = setup(spy)
   // A link to a customer that does not exist — provable only against the
   // store, and still refused before anything leaves the process.
-  const result = rt.execute('reassignOrder', { orderId: 'O2', toCustomerId: 'GHOST' }, { actor: 'test' })
+  const result = rt.execute(
+    'reassignOrder',
+    { orderId: 'O2', fromCustomerId: 'C1', toCustomerId: 'GHOST' },
+    { actor: 'test' },
+  )
   assert.equal(result.ok, false)
   if (!result.ok) {
     assert.equal(result.error.code, 'INVALID_EDITS')
@@ -484,7 +462,6 @@ test('DB-dependent violations are ALSO refused before the adapter runs (prefligh
   // The dry run left no trace: the unlink that "ran" before the failing
   // link is rolled back with everything else.
   assert.deepEqual(rt.traverse<{ id: string }>('customerOrders', 'C1', asTest).map((o) => o.id), ['O1', 'O2'])
-  assert.equal(rt.get<{ customerId: string }>('Order', 'O2', asTest)!.customerId, 'C1')
   assert.equal(rt.auditLog({ status: 'applied' }).length, 0)
 })
 
@@ -502,22 +479,6 @@ test('one-to-many cardinality is enforced at the write gate, before write-back',
   assert.deepEqual(calls, [])
   assert.deepEqual(rt.traverse<{ id: string }>('customerOrders', 'O2', { ...asTest, direction: 'reverse' }).map((c) => c.id), ['C1'])
   assert.equal(rt.auditLog({ status: 'applied' }).length, 0)
-})
-
-test('the link and its foreign-key property twin must agree', () => {
-  const calls: string[] = []
-  const spy: WritebackAdapter = { name: 'spy', apply: () => calls.push('adapter') && undefined }
-  const rt = setup(spy)
-  // Moving the property without moving the link leaves two representations
-  // of one fact telling different stories.
-  const result = rt.execute('driftFk', { orderId: 'O2', toCustomerId: 'C2' }, { actor: 'test' })
-  assert.equal(result.ok, false)
-  if (!result.ok) {
-    assert.equal(result.error.code, 'INVALID_EDITS')
-    assert.match(result.error.message, /disagrees/)
-  }
-  assert.deepEqual(calls, [])
-  assert.equal(rt.get<{ customerId: string }>('Order', 'O2', asTest)!.customerId, 'C1')
 })
 
 test('a commit failure after write-back is the declared divergence — audited with its edits', () => {
@@ -615,7 +576,7 @@ test('ontology-owned state survives a re-index; source-backed state refreshes', 
   rt.execute('setAssignee', { orderId: 'O2', assignee: 'alice' }, { actor: 'test' })
   // The source moved on: O2 shipped upstream.
   const moved = structuredClone(SNAPSHOT)
-  moved.objects.Order[1] = { id: 'O2', customerId: 'C1', status: 'shipped', total: 200 }
+  moved.objects.Order[1] = { id: 'O2', status: 'shipped', total: 200 }
   rt.load(moved)
   const o2 = rt.get<{ status: string; assignee: string | null }>('Order', 'O2', asTest)!
   assert.equal(o2.status, 'shipped') // the source spoke, the base refreshed
@@ -655,7 +616,7 @@ test('a source snapshot cannot supply ontology-owned properties', () => {
     () =>
       rt.load({
         objects: {
-          Order: [{ id: 'O9', customerId: 'C1', status: 'pending', total: 1, assignee: 'smuggled' }],
+          Order: [{ id: 'O9', status: 'pending', total: 1, assignee: 'smuggled' }],
         },
       }),
     /ontology-owned/,
@@ -670,152 +631,58 @@ test('a source snapshot cannot supply ontology-owned types or links', () => {
 
 test('ontology-owned objects and links survive a re-index untouched', () => {
   const rt = setup()
-  rt.execute('openTask', { taskId: 'T1', title: 'call the customer' }, { actor: 'test' })
-  rt.execute('attachTask', { orderId: 'O2', taskId: 'T1' }, { actor: 'test' })
+  rt.execute('openTask', { orderId: 'O2', taskId: 'T1', title: 'call the customer' }, { actor: 'test' })
   rt.load(SNAPSHOT) // full re-index of everything a source supplies
   assert.equal(rt.get<{ title: string }>('Task', 'T1', asTest)!.title, 'call the customer')
   assert.deepEqual(rt.traverse<{ id: string }>('orderTasks', 'O2', asTest).map((t) => t.id), ['T1'])
 })
 
-// ── Targetless actions ──
+test('a model that stops owning a property refuses to load over its edits', () => {
+  const db = new Database(':memory:')
+  const widget = (owned: boolean) =>
+    defineOntology({
+      name: 'w',
+      objects: {
+        Widget: defineObject({
+          primaryKey: 'id',
+          properties: { id: z.string(), note: z.string() },
+          ...(owned ? { owned: { note: '' } } : {}),
+        }),
+      },
+      links: {},
+      actions: {
+        setNote: defineAction({
+          object: 'Widget',
+          targetParam: 'id',
+          params: { id: z.string(), note: z.string() },
+          preconditions: [],
+          effects: ({ object, params }) => [modify('Widget', object.id as string, { note: params.note })],
+        }),
+      },
+    })
+  const v1 = createRuntime(widget(true), db)
+  v1.load({ objects: { Widget: [{ id: 'W1' }] } })
+  assert.equal(v1.execute('setNote', { id: 'W1', note: 'keep me' }, { actor: 'test' }).ok, true)
+  // The model evolves: `note` is no longer ontology-owned, but the overlay
+  // still carries an edit for it. A refresh must not decide that state's
+  // fate — schema evolution must, explicitly.
+  const v2 = createRuntime(widget(false), db)
+  assert.throws(() => v2.load({ objects: { Widget: [{ id: 'W1', note: 'fresh' }] } }), /no longer declares/)
+})
 
-test('a targetless action creates from nothing and is audited as such', () => {
+// ── Creation through the gate ──
+
+test('an action can create an ontology-owned object and wire it, atomically', () => {
   const rt = setup()
-  const result = rt.execute('openTask', { taskId: 'T1', title: 'triage the backlog' }, { actor: 'test' })
+  const result = rt.execute('openTask', { orderId: 'O2', taskId: 'T1', title: 'triage the backlog' }, { actor: 'test' })
   assert.equal(result.ok, true)
   assert.equal(rt.get<{ title: string }>('Task', 'T1', asTest)!.title, 'triage the backlog')
-  const applied = rt.auditLog({ status: 'applied' })[0]
-  assert.equal(applied?.target, '(targetless)')
-})
-
-test('a targetless action still validates params and its edit plan', () => {
-  const rt = setup()
-  const bad = rt.execute('openTask', { taskId: '', title: 'x' }, { actor: 'test' })
-  assert.equal(bad.ok, false)
-  if (!bad.ok) assert.equal(bad.error.code, 'INVALID_PARAMS')
-  assert.equal(rt.auditLog({ status: 'rejected' })[0]?.target, '(targetless)')
+  assert.deepEqual(rt.traverse<{ id: string }>('orderTasks', 'O2', asTest).map((t) => t.id), ['T1'])
+  assert.equal(rt.auditLog({ status: 'applied' })[0]?.target, 'Order/O2')
   // A second creation with the same pk collides in the store.
-  assert.equal(rt.execute('openTask', { taskId: 'T1', title: 'a' }, { actor: 'test' }).ok, true)
-  const dup = rt.execute('openTask', { taskId: 'T1', title: 'b' }, { actor: 'test' })
+  const dup = rt.execute('openTask', { orderId: 'O2', taskId: 'T1', title: 'again' }, { actor: 'test' })
   assert.equal(dup.ok, false)
   if (!dup.ok) assert.equal(dup.error.code, 'INVALID_EDITS')
-})
-
-test('a targetless action cannot touch pre-existing state — the missing gate is not a probe', () => {
-  const rt = setup()
-  const sneak = rt.execute('sneakyTargetless', { orderId: 'O2' }, { actor: 'test' })
-  assert.equal(sneak.ok, false)
-  if (!sneak.ok) assert.equal(sneak.error.code, 'TARGETLESS_SCOPE')
-  assert.equal(rt.get<{ assignee: string | null }>('Order', 'O2', asTest)!.assignee, null)
-  // Even a legitimate create cannot wire itself to something that already exists.
-  const graft = rt.execute('graftTask', { taskId: 'T9', orderId: 'O2' }, { actor: 'test' })
-  assert.equal(graft.ok, false)
-  if (!graft.ok) assert.equal(graft.error.code, 'TARGETLESS_SCOPE')
-  assert.equal(rt.get('Task', 'T9', asTest), undefined)
-})
-
-test('targetless identity is (type, pk) pairs — joined-string collisions do not fool the scope', () => {
-  // A model whose names embed the would-be delimiter: type "A/B" with pk "C"
-  // must never satisfy a check for type "A" with pk "B/C".
-  const tricky = defineOntology({
-    name: 'tricky',
-    objects: {
-      A: defineObject({ primaryKey: 'id', properties: { id: z.string(), label: z.string().nullable() }, owned: true }),
-      'A/B': defineObject({ primaryKey: 'id', properties: { id: z.string() }, owned: true }),
-    },
-    links: {},
-    actions: {
-      collide: defineAction({
-        params: { _: z.string() },
-        preconditions: [],
-        effects: () => [
-          create('A/B', 'C', { id: 'C' }),
-          modify('A', 'B/C', { label: 'gotcha' }), // pre-existing A/"B/C" — must be out of scope
-        ],
-      }),
-      seedA: defineAction({
-        params: { id: z.string() },
-        preconditions: [],
-        effects: ({ params }) => [create('A', params.id as string, { id: params.id, label: null })],
-      }),
-    },
-  })
-  const rt = createRuntime(tricky, new Database(':memory:'))
-  assert.equal(rt.execute('seedA', { id: 'B/C' }, { actor: 'test' }).ok, true)
-  const result = rt.execute('collide', { _: 'x' }, { actor: 'test' })
-  assert.equal(result.ok, false)
-  if (!result.ok) assert.equal(result.error.code, 'TARGETLESS_SCOPE')
-  assert.equal(rt.get<{ label: string | null }>('A', 'B/C', { actor: 'test' })!.label, null)
-})
-
-test('an adapter that opens a transaction on the store is rolled back and refused', () => {
-  const db = new Database(':memory:')
-  const intruder: WritebackAdapter = {
-    name: 'intruder',
-    apply: () => {
-      db.exec('BEGIN')
-    },
-  }
-  const rt = createRuntime(ontology, db, { writeback: intruder })
-  rt.load(SNAPSHOT)
-  assert.throws(
-    () => rt.execute('cancelOrder', { orderId: 'O2', reason: 'x' }, { actor: 'test' }),
-    /transaction open/,
-  )
-  assert.equal(db.inTransaction, false) // the intrusion was rolled back
-  assert.equal(rt.get<{ status: string }>('Order', 'O2', asTest)!.status, 'pending')
-  assert.equal(rt.auditLog({ status: 'rejected' })[0]?.error?.code, 'FOREIGN_TRANSACTION')
-  assert.equal(rt.auditLog({ status: 'applied' }).length, 0)
-})
-
-test('a foreign transaction is caught however the attempt ends — adapter throw included', () => {
-  const db = new Database(':memory:')
-  const chaos: WritebackAdapter = {
-    name: 'chaos',
-    apply: () => {
-      db.exec('BEGIN')
-      throw new Error('source failed')
-    },
-  }
-  const rt = createRuntime(ontology, db, { writeback: chaos })
-  rt.load(SNAPSHOT)
-  assert.throws(() => rt.execute('cancelOrder', { orderId: 'O2', reason: 'x' }, { actor: 'test' }), /transaction open/)
-  assert.equal(db.inTransaction, false)
-  assert.equal(rt.get<{ status: string }>('Order', 'O2', asTest)!.status, 'pending')
-  // The WRITEBACK_FAILED refusal was written inside the intruding
-  // transaction and rolled back with it — the one fact that survives is the
-  // tampering itself.
-  assert.deepEqual(rt.auditLog().map((e) => e.error?.code), ['FOREIGN_TRANSACTION'])
-})
-
-test('a foreign transaction opened by a rule is caught on the refusal path too', () => {
-  const db = new Database(':memory:')
-  const trap = defineOntology({
-    name: 'trap',
-    objects: {
-      Thing: defineObject({ primaryKey: 'id', properties: { id: z.string() } }),
-    },
-    links: {},
-    actions: {
-      diversion: defineAction({
-        object: 'Thing',
-        targetParam: 'id',
-        params: { id: z.string() },
-        preconditions: [
-          () => {
-            db.exec('BEGIN')
-            return reject('DIVERTED', 'refused, with a transaction left behind')
-          },
-        ],
-        effects: () => [],
-      }),
-    },
-  })
-  const rt = createRuntime(trap, db)
-  rt.load({ objects: { Thing: [{ id: 'T1' }] } })
-  assert.throws(() => rt.execute('diversion', { id: 'T1' }, { actor: 'test' }), /transaction open/)
-  assert.equal(db.inTransaction, false)
-  assert.deepEqual(rt.auditLog().map((e) => e.error?.code), ['FOREIGN_TRANSACTION'])
 })
 
 test('every stored row must be plain JSON — whichever door it came through', () => {
@@ -823,19 +690,23 @@ test('every stored row must be plain JSON — whichever door it came through', (
   const clocks = defineOntology({
     name: 'clocks',
     objects: {
+      Job: defineObject({ primaryKey: 'id', properties: { id: z.string() } }),
       Stamp: defineObject({ primaryKey: 'id', owned: true, properties: { id: z.string(), at: z.date() } }),
     },
     links: {},
     actions: {
       mark: defineAction({
-        params: { id: z.string() },
+        object: 'Job',
+        targetParam: 'jobId',
+        params: { jobId: z.string(), id: z.string() },
         preconditions: [],
         effects: ({ params }) => [create('Stamp', params.id as string, { id: params.id, at: new Date(0) })],
       }),
     },
   })
   const rt = createRuntime(clocks, new Database(':memory:'))
-  const result = rt.execute('mark', { id: 'S1' }, { actor: 'test' })
+  rt.load({ objects: { Job: [{ id: 'J1' }] } })
+  const result = rt.execute('mark', { jobId: 'J1', id: 'S1' }, { actor: 'test' })
   assert.equal(result.ok, false)
   if (!result.ok) {
     assert.equal(result.error.code, 'INVALID_EDITS')
@@ -854,43 +725,7 @@ test('every stored row must be plain JSON — whichever door it came through', (
   assert.throws(() => rt2.load({ objects: { Event: [{ id: 'E1', at: '2020-01-01' }] } }), /plain JSON/)
 })
 
-test('a conditional transform is caught at the store boundary, not just at definition', () => {
-  const moody = defineOntology({
-    name: 'moody',
-    objects: {
-      Gauge: defineObject({
-        primaryKey: 'id',
-        properties: {
-          id: z.string(),
-          // 'idle' is a fixed point of this schema; every other string is not.
-          level: z.string().transform((s) => (s === 'idle' ? 'idle' : (s.length as unknown as string))),
-        },
-        owned: { level: 'idle' }, // passes the definition-time spot check…
-      }),
-    },
-    links: {},
-    actions: {
-      poke: defineAction({
-        object: 'Gauge',
-        targetParam: 'id',
-        params: { id: z.string(), level: z.string() },
-        preconditions: [],
-        effects: ({ object, params }) => [modify('Gauge', object.id as string, { level: params.level })],
-      }),
-    },
-  })
-  const rt = createRuntime(moody, new Database(':memory:'))
-  rt.load({ objects: { Gauge: [{ id: 'G1' }] } })
-  // …but a value the schema will not accept back is refused at the write.
-  const result = rt.execute('poke', { id: 'G1', level: 'abc' }, { actor: 'test' })
-  assert.equal(result.ok, false)
-  if (!result.ok) {
-    assert.equal(result.error.code, 'INVALID_EDITS')
-    assert.match(result.error.message, /own output/)
-  }
-})
-
-test('owned values live in plain JSON: class instances and one-way transforms are refused at definition', () => {
+test('an owned default that is not plain JSON is refused at definition', () => {
   // A Date is not plain JSON — it would come back from the store as
   // something else entirely.
   assert.throws(
@@ -901,16 +736,6 @@ test('owned values live in plain JSON: class instances and one-way transforms ar
         owned: { at: new Date(0) },
       }),
     /plain JSON/,
-  )
-  // A schema that does not accept its own output cannot guard a stored value.
-  assert.throws(
-    () =>
-      defineObject({
-        primaryKey: 'id',
-        properties: { id: z.string(), size: z.string().transform((s) => s.length) },
-        owned: { size: 'abc' },
-      }),
-    /accept its own output/,
   )
 })
 
@@ -944,20 +769,6 @@ test('empty names are not identifiers', () => {
   )
 })
 
-test('a source-backed delete cannot smuggle away ontology-owned edits', () => {
-  const rt = setup()
-  rt.execute('setAssignee', { orderId: 'O2', assignee: 'alice' }, { actor: 'test' })
-  const blocked = rt.execute('scrapOrder', { orderId: 'O2' }, { actor: 'test' })
-  assert.equal(blocked.ok, false)
-  if (!blocked.ok) {
-    assert.equal(blocked.error.code, 'INVALID_EDITS')
-    assert.match(blocked.error.message, /clear them first/)
-  }
-  // Clearing the edit is an action too — then the delete goes through.
-  rt.execute('setAssignee', { orderId: 'O2', assignee: null }, { actor: 'test' })
-  assert.equal(rt.execute('scrapOrder', { orderId: 'O2' }, { actor: 'test' }).ok, true)
-})
-
 test('an empty modify is not an edit', () => {
   const rt = setup()
   const result = rt.execute('hollowModify', { orderId: 'O2' }, { actor: 'test' })
@@ -981,7 +792,7 @@ test('execute() and load() refuse to run inside a caller-owned transaction', () 
   assert.equal(rt.get<{ assignee: string | null }>('Order', 'O2', { actor: 'test' })!.assignee, null)
 })
 
-test('prune compares canonically — key order cannot hide "back at default"', () => {
+test('prune compares structurally — key order cannot hide "back at default"', () => {
   const mini = defineOntology({
     name: 'mini',
     objects: {
@@ -1013,68 +824,18 @@ test('prune compares canonically — key order cannot hide "back at default"', (
   assert.equal(rt.get('Widget', 'W1', { actor: 'test' }), undefined)
 })
 
-test('viaProperty twins are exclusive, and an ontology-owned twin defaults to unlinked', () => {
-  const objects = () => ({
-    Board: defineObject({ primaryKey: 'id', properties: { id: z.string() } }),
-    Card: defineObject({
-      primaryKey: 'id',
-      properties: { id: z.string(), boardId: z.string().nullable() },
-      owned: { boardId: null },
-    }),
-  })
-  // Two links claiming the same property twin: they could never both agree with it.
-  assert.throws(
-    () =>
-      defineOntology({
-        name: 'bad',
-        objects: objects(),
-        links: {
-          pinned: defineLink({ from: 'Board', to: 'Card', kind: 'one-to-many', owned: true, viaProperty: 'boardId' }),
-          filed: defineLink({ from: 'Board', to: 'Card', kind: 'one-to-many', owned: true, viaProperty: 'boardId' }),
-        },
-        actions: {},
-      }),
-    /both declare/,
-  )
-  // An owned twin with a non-null default could never survive a first load.
-  assert.throws(
-    () =>
-      defineOntology({
-        name: 'bad2',
-        objects: {
-          Board: defineObject({ primaryKey: 'id', properties: { id: z.string() } }),
-          Card: defineObject({
-            primaryKey: 'id',
-            properties: { id: z.string(), boardId: z.string() },
-            owned: { boardId: 'lobby' },
-          }),
-        },
-        links: {
-          pinned: defineLink({ from: 'Board', to: 'Card', kind: 'one-to-many', owned: true, viaProperty: 'boardId' }),
-        },
-        actions: {},
-      }),
-    /default null/,
-  )
-})
-
-test('deleting an ontology-owned object is an ontology edit — RESTRICT still applies', () => {
-  const rt = setup()
-  rt.execute('openTask', { taskId: 'T1', title: 'x' }, { actor: 'test' })
-  rt.execute('attachTask', { orderId: 'O2', taskId: 'T1' }, { actor: 'test' })
-  assert.equal(rt.execute('scrapTask', { orderId: 'O2', taskId: 'T1' }, { actor: 'test' }).ok, true)
-  assert.equal(rt.get('Task', 'T1', asTest), undefined)
-})
-
 // ── Graph edits ──
 
 test('actions can rewire the graph itself — links are edits too', () => {
   const rt = setup()
-  const result = rt.execute('reassignOrder', { orderId: 'O2', toCustomerId: 'C2' }, { actor: 'test' })
+  const result = rt.execute(
+    'reassignOrder',
+    { orderId: 'O2', fromCustomerId: 'C1', toCustomerId: 'C2' },
+    { actor: 'test' },
+  )
   assert.equal(result.ok, true)
   assert.deepEqual(rt.traverse<{ id: string }>('customerOrders', 'C1', asTest).map((o) => o.id), ['O1'])
   assert.deepEqual(rt.traverse<{ id: string }>('customerOrders', 'C2', asTest).map((o) => o.id), ['O2'])
-  assert.equal(rt.get<{ customerId: string }>('Order', 'O2', asTest)!.customerId, 'C2')
 })
 
 test('links traverse in both directions', () => {
@@ -1087,19 +848,6 @@ test('links traverse in both directions', () => {
     rt.traverse<{ id: string }>('customerOrders', 'O2', { ...asTest, direction: 'reverse' }).map((c) => c.id),
     ['C1'],
   )
-})
-
-test('delete is RESTRICT: a linked object refuses to die — unlink first', () => {
-  const rt = setup()
-  const blocked = rt.execute('purgeOrder', { orderId: 'O2' }, { actor: 'test' })
-  assert.equal(blocked.ok, false)
-  if (!blocked.ok) {
-    assert.equal(blocked.error.code, 'INVALID_EDITS')
-    assert.match(blocked.error.message, /unlink first/)
-  }
-  assert.notEqual(rt.get('Order', 'O2', asTest), undefined)
-  assert.equal(rt.execute('scrapOrder', { orderId: 'O2' }, { actor: 'test' }).ok, true)
-  assert.equal(rt.get('Order', 'O2', asTest), undefined)
 })
 
 test('create refuses a pk that disagrees with the data — before write-back', () => {
@@ -1153,7 +901,7 @@ test('crashing rules are audited too — RULE_CRASHED, then the error surfaces',
 
 test('re-loading resets source-backed links instead of merging', () => {
   const rt = setup()
-  rt.execute('reassignOrder', { orderId: 'O2', toCustomerId: 'C2' }, { actor: 'test' })
+  rt.execute('reassignOrder', { orderId: 'O2', fromCustomerId: 'C1', toCustomerId: 'C2' }, { actor: 'test' })
   rt.load(SNAPSHOT)
   // The local echo of the reassignment is gone; the snapshot's view is back.
   assert.deepEqual(
@@ -1172,7 +920,7 @@ test('the indexed snapshot must satisfy the model constraints too', () => {
             { id: 'C1', name: 'A' },
             { id: 'C2', name: 'B' },
           ],
-          Order: [{ id: 'O1', customerId: 'C1', status: 'pending', total: 1 }],
+          Order: [{ id: 'O1', status: 'pending', total: 1 }],
         },
         links: { customerOrders: [['C1', 'O1'], ['C2', 'O1']] },
       }),
@@ -1180,27 +928,9 @@ test('the indexed snapshot must satisfy the model constraints too', () => {
   )
 })
 
-test('the indexed snapshot must keep the link and its property twin agreeing', () => {
-  const rt = createRuntime(ontology, new Database(':memory:'))
-  assert.throws(
-    () =>
-      rt.load({
-        objects: {
-          Customer: [
-            { id: 'C1', name: 'A' },
-            { id: 'C2', name: 'B' },
-          ],
-          Order: [{ id: 'O1', customerId: 'C2', status: 'pending', total: 1 }],
-        },
-        links: { customerOrders: [['C1', 'O1']] },
-      }),
-    /disagrees/,
-  )
-})
-
 test('a partial re-load that breaks surviving edits is refused whole', () => {
   const rt = setup()
-  rt.execute('reassignOrder', { orderId: 'O2', toCustomerId: 'C2' }, { actor: 'test' })
+  rt.execute('reassignOrder', { orderId: 'O2', fromCustomerId: 'C1', toCustomerId: 'C2' }, { actor: 'test' })
   // Re-load Customers without C2 — the surviving edited link would dangle.
   assert.throws(() => rt.load({ objects: { Customer: [{ id: 'C1', name: 'Yamada' }] } }), /does not exist/)
   // Rolled back whole: C2 and the edited link both survive.
@@ -1213,30 +943,7 @@ test('a partial re-load that breaks surviving edits is refused whole', () => {
 
 test('indexing validates rows against the model', () => {
   const rt = createRuntime(ontology, new Database(':memory:'))
-  assert.throws(() =>
-    rt.load({ objects: { Order: [{ id: 'O9', customerId: 'C1', status: 'teleported', total: 1 }] } }),
-  )
-})
-
-test('a link and its viaProperty twin cannot sit on opposite sides of the authority line', () => {
-  assert.throws(
-    () =>
-      defineOntology({
-        name: 'bad',
-        objects: {
-          Board: defineObject({ primaryKey: 'id', properties: { id: z.string() } }),
-          Card: defineObject({
-            primaryKey: 'id',
-            properties: { id: z.string(), boardId: z.string() },
-            owned: { boardId: '' },
-          }),
-        },
-        // Source-backed link, ontology-owned property: one fact, two owners.
-        links: { boardCards: defineLink({ from: 'Board', to: 'Card', kind: 'one-to-many', viaProperty: 'boardId' }) },
-        actions: {},
-      }),
-    /opposite sides/,
-  )
+  assert.throws(() => rt.load({ objects: { Order: [{ id: 'O9', status: 'teleported', total: 1 }] } }))
 })
 
 test('indexing refuses unknown keys instead of silently stripping them', () => {

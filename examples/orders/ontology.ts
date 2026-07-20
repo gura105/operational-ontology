@@ -35,7 +35,6 @@ export const orders = defineOntology({
         actor.startsWith('system:'),
       properties: {
         id: z.string(),
-        customerId: z.string(),
         // Source-backed: both legacy systems master this value.
         status: z.enum(['pending', 'shipped', 'cancelled']),
         total: z.number().int(), // minor units — money is not a float
@@ -82,10 +81,9 @@ export const orders = defineOntology({
       from: 'Customer',
       to: 'Order',
       kind: 'one-to-many',
-      via: 'foreign key (orders.customerId)',
-      // The link mirrors Order.customerId — one fact, two representations,
-      // and the runtime keeps them agreeing.
-      viaProperty: 'customerId',
+      // The foreign key lives in the legacy schemas; here the relationship
+      // is represented once, as a link — not duplicated as a property.
+      via: 'foreign key (north.tbl_order.cust_cd ∪ south.SALES_ORDER.CUST_ID)',
     }),
     orderProducts: defineLink({
       from: 'Order',
@@ -107,8 +105,9 @@ export const orders = defineOntology({
     /**
      * The verb this whole repository exists to demonstrate. The rule
      * "a shipped order cannot be cancelled" is a domain invariant — no
-     * permission system can express it, and no caller can bypass it.
-     * Cancellation is written back to the originating legacy system.
+     * permission system can express it, and every caller of the API meets
+     * the same gate. Cancellation is written back to the originating legacy
+     * system.
      */
     cancelOrder: defineAction({
       description: 'Cancel an order. Shipped orders cannot be cancelled.',
@@ -157,44 +156,33 @@ export const orders = defineOntology({
     }),
 
     /**
-     * A targetless action: no pre-existing object is the subject — its whole
-     * plan is creation. Notes are ontology-owned, so no write-back; the
-     * caller supplies the id (see "What if an agent retries?" in the README —
-     * an invocation-supplied id is also the minimal idempotency hook).
+     * Creates ontology-owned state and rewires the ontology-owned part of
+     * the graph in one atomic plan: the note is created and linked to the
+     * order under the same gate — the order must exist and be visible to the
+     * actor, and the one-to-many cardinality of orderNotes is enforced.
+     * Notes are ontology-owned, so no write-back; the caller supplies the id
+     * (see "What if an agent retries?" in the README — an invocation-supplied
+     * id is also the minimal idempotency hook).
      */
-    fileNote: defineAction({
-      description: 'File a free-standing triage note.',
+    addOrderNote: defineAction({
+      description: 'File a triage note against an order.',
+      object: 'Order',
+      targetParam: 'orderId',
       params: {
+        orderId: z.string(),
         noteId: z.string().min(1),
         text: z.string().min(1),
         author: z.string().min(1),
       },
       preconditions: [],
-      effects: ({ params }) => [
+      effects: ({ object, params }) => [
         create('Note', params.noteId as string, {
           id: params.noteId,
           text: params.text,
           author: params.author,
         }),
+        link('orderNotes', object.id as string, params.noteId as string),
       ],
-    }),
-
-    /**
-     * Rewires the ontology-owned part of the graph: attaching a note to an
-     * order is a link edit, gated like every other write — the order must
-     * exist and be visible to the actor, the note must exist, and the
-     * one-to-many cardinality of orderNotes is enforced at the gate.
-     */
-    attachNote: defineAction({
-      description: 'Attach an existing note to an order.',
-      object: 'Order',
-      targetParam: 'orderId',
-      params: {
-        orderId: z.string(),
-        noteId: z.string(),
-      },
-      preconditions: [],
-      effects: ({ object, params }) => [link('orderNotes', object.id as string, params.noteId as string)],
     }),
   },
 })

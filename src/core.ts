@@ -6,7 +6,9 @@
  *
  *   - objects & links are indexed from existing physical data (read side)
  *   - every write goes through an action: preconditions → effects → audit log
- *   - there is no other write path
+ *   - the API exposes no other write path — a contract on the API, not a
+ *     privilege boundary against code holding the database handle (declared;
+ *     see "Transaction ownership" in IMPLEMENTATION.md)
  *   - authority is declared in the model: source-backed state comes from the
  *     sources and write-back governs its changes; ontology-owned state lives
  *     here, needs no write-back, and survives re-indexing
@@ -15,6 +17,7 @@
  * runtime interprets it — which is what lets `mcp.ts` enumerate it and expose
  * the same model, guarded by the same rules, to AI agents.
  */
+import { isDeepStrictEqual } from 'node:util'
 import { z } from 'zod'
 import type { Database } from 'better-sqlite3'
 
@@ -27,11 +30,11 @@ export interface ObjectTypeDef<S extends Properties = Properties> {
   primaryKey: string
   /**
    * Property schema. Validates rows at indexing time and edits at write time,
-   * and is reused verbatim to generate MCP tool schemas. The runtime stores
-   * what a schema produces and re-validates stored values through the same
-   * schema on later writes — so a schema must accept its own output
-   * (validate-and-normalize, not one-way transform). Enforced at definition
-   * time for `owned` defaults; declared for everything else.
+   * and is reused verbatim to generate MCP tool schemas. Schemas must
+   * validate, not transform: the runtime stores what a schema produced and
+   * feeds it back through the same schema on later writes, so a transforming
+   * schema would refuse or rewrite its own output — a declared contract (see
+   * "The storable boundary" in IMPLEMENTATION.md).
    */
   properties: S
   /**
@@ -40,9 +43,8 @@ export interface ObjectTypeDef<S extends Properties = Properties> {
    * supplies it, and changing it requires write-back.
    *
    * - `owned: true` — the whole type is ontology-owned, existence included.
-   *   No source supplies its rows (`load()` refuses them); actions create,
-   *   modify, and delete them without write-back; they survive re-indexing
-   *   untouched.
+   *   No source supplies its rows (`load()` refuses them); actions create and
+   *   modify them without write-back; they survive re-indexing untouched.
    * - `owned: { prop: default }` — these properties are ontology-owned on
    *   otherwise source-backed rows. A loaded row must NOT supply them (the
    *   source has no authority over them); they start at the declared default,
@@ -81,24 +83,14 @@ export function defineObject<S extends Properties>(def: ObjectTypeDef<S>): Objec
       if (key === def.primaryKey) {
         throw new Error(`the primary key "${key}" cannot be ontology-owned`)
       }
-      const property = def.properties[key] as z.ZodType
-      const parsed = property.safeParse(fallback)
+      const parsed = (def.properties[key] as z.ZodType).safeParse(fallback)
       if (!parsed.success) {
         throw new Error(`default for owned property "${key}" does not satisfy its schema`)
       }
       // Owned values live in the store and travel through re-indexing, so
-      // both the declared default and what the schema makes of it must be
-      // plain JSON data — and the schema must accept its own output, because
-      // the runtime stores normalized values and re-validates them later.
-      if (canonical(fallback) === undefined || canonical(parsed.data) === undefined) {
+      // the default must be a value the store can hold faithfully.
+      if (!isPlainJson(parsed.data)) {
         throw new Error(`default for owned property "${key}" must be plain JSON data`)
-      }
-      const again = property.safeParse(parsed.data)
-      if (!again.success || canonical(again.data) !== canonical(parsed.data)) {
-        throw new Error(
-          `the schema for owned property "${key}" must accept its own output — ` +
-            'the runtime stores normalized values and re-validates them on later writes',
-        )
       }
     }
   }
@@ -106,45 +98,16 @@ export function defineObject<S extends Properties>(def: ObjectTypeDef<S>): Objec
 }
 
 /**
- * Canonical JSON of a plain-JSON value — object keys sorted at every depth,
- * so structurally equal values compare equal regardless of key order.
- * Returns undefined for anything JSON cannot faithfully round-trip: Dates
- * and other class instances, Maps, functions, symbols, BigInt, NaN and
- * Infinity, undefined at any depth. What the store persists must survive
- * the trip unchanged, so "not plain JSON" means "not a storable value".
+ * The store keeps JSON, so a storable value must survive the JSON round trip
+ * unchanged. Dates and other class instances, Maps, functions, symbols,
+ * BigInt, NaN and Infinity, holes in arrays, undefined at any depth — all
+ * would come back changed or dropped, so all are "not plain JSON".
  */
-function canonical(value: unknown): string | undefined {
-  const sort = (v: unknown): unknown => {
-    if (v === null || typeof v === 'string' || typeof v === 'boolean') return v
-    if (typeof v === 'number') {
-      if (!Number.isFinite(v)) throw new RangeError('not plain JSON')
-      return v
-    }
-    if (Array.isArray(v)) {
-      // Holes and named properties do not survive JSON — not plain data.
-      // Checked key by key: a hole and a named property can cancel out in a
-      // bare length comparison.
-      const keys = Object.keys(v)
-      if (keys.length !== v.length || keys.some((key, i) => key !== String(i))) {
-        throw new RangeError('not plain JSON')
-      }
-      return v.map(sort)
-    }
-    if (typeof v === 'object') {
-      const proto = Object.getPrototypeOf(v)
-      if (proto !== Object.prototype && proto !== null) throw new RangeError('not plain JSON')
-      return Object.fromEntries(
-        Object.entries(v as Record<string, unknown>)
-          .sort(([a], [b]) => (a < b ? -1 : 1))
-          .map(([k, inner]) => [k, sort(inner)]),
-      )
-    }
-    throw new RangeError('not plain JSON') // undefined, function, symbol, bigint
-  }
+function isPlainJson(value: unknown): boolean {
   try {
-    return JSON.stringify(sort(value))
+    return isDeepStrictEqual(JSON.parse(JSON.stringify(value)), value)
   } catch {
-    return undefined
+    return false
   }
 }
 
@@ -166,14 +129,6 @@ export interface LinkTypeDef {
   owned?: true
   /** Physical origin of the link (a foreign key, a join table) — documentation only. */
   via?: string
-  /**
-   * For a one-to-many link mirrored by a foreign-key property on the "to"
-   * side (`Order.customerId` for customerOrders): the property's name. The
-   * link and the property are two representations of one fact, so the
-   * runtime validates they agree — at indexing time and after every edit
-   * plan. Absent for links with no property twin (join tables).
-   */
-  viaProperty?: string
   description?: string
 }
 
@@ -194,12 +149,11 @@ export function reject(code: string, message: string): Violation {
 /**
  * Edits are data: what an action wants to change, decoupled from how it is
  * applied. Links are edits too — actions can rewire the graph itself, not
- * just node properties.
+ * just node properties. (Deletes are out of scope in v0.2 — see the README.)
  */
 export type Edit =
   | { op: 'modify'; object: string; pk: string; changes: Record<string, unknown> }
   | { op: 'create'; object: string; pk: string; data: Record<string, unknown> }
-  | { op: 'delete'; object: string; pk: string }
   | { op: 'link'; link: string; from: string; to: string }
   | { op: 'unlink'; link: string; from: string; to: string }
 
@@ -215,19 +169,12 @@ export const create = (object: string, pk: string, data: Record<string, unknown>
   pk,
   data,
 })
-export const remove = (object: string, pk: string): Edit => ({ op: 'delete', object, pk })
 export const link = (linkName: string, from: string, to: string): Edit => ({ op: 'link', link: linkName, from, to })
 export const unlink = (linkName: string, from: string, to: string): Edit => ({ op: 'unlink', link: linkName, from, to })
 
 export interface ActionCtx<O = Record<string, unknown>, P = Record<string, unknown>> {
   /** The object the action targets, loaded from the ontology store. */
   object: O
-  params: P
-  actor: string
-}
-
-/** Context for a targetless action: no existing object is the subject. */
-export interface TargetlessActionCtx<P = Record<string, unknown>> {
   params: P
   actor: string
 }
@@ -265,39 +212,9 @@ export interface ActionDef<S extends Properties = Properties> {
   writeback?: boolean
 }
 
-/**
- * An action with no pre-existing target — its whole plan is creation. No
- * target means no visibility gate, and the runtime holds the plan to that
- * bargain: it may only create objects and wire the objects it created to
- * each other. An edit touching pre-existing state — a modify, a delete, a
- * link endpoint — is refused (TARGETLESS_SCOPE): without a gate it would be
- * an existence probe. Touching what exists is a targeted action's job.
- */
-export interface TargetlessActionDef<S extends Properties = Properties> {
-  params: S
-  description?: string
-  preconditions: Array<(ctx: TargetlessActionCtx<any>) => Violation | void>
-  effects: (ctx: TargetlessActionCtx<any>) => Edit[]
-  writeback?: boolean
-}
-
-export type AnyActionDef = ActionDef<any> | TargetlessActionDef<any>
-
-export function isTargeted(action: AnyActionDef): action is ActionDef<any> {
-  return 'targetParam' in action
-}
-
-export function defineAction<S extends Properties>(def: ActionDef<S>): ActionDef<S>
-export function defineAction<S extends Properties>(def: TargetlessActionDef<S>): TargetlessActionDef<S>
-export function defineAction(def: AnyActionDef): AnyActionDef {
-  if ('targetParam' in def || 'object' in def) {
-    const targeted = def as ActionDef
-    if (typeof targeted.object !== 'string' || typeof targeted.targetParam !== 'string') {
-      throw new Error('a targeted action needs both `object` and `targetParam`; a targetless action has neither')
-    }
-    if (!Object.hasOwn(targeted.params, targeted.targetParam)) {
-      throw new Error(`targetParam "${targeted.targetParam}" is not one of the action's params`)
-    }
+export function defineAction<S extends Properties>(def: ActionDef<S>): ActionDef<S> {
+  if (!Object.hasOwn(def.params, def.targetParam)) {
+    throw new Error(`targetParam "${def.targetParam}" is not one of the action's params`)
   }
   return def
 }
@@ -306,7 +223,7 @@ export interface OntologyDef {
   name: string
   objects: Record<string, ObjectTypeDef<any>>
   links: Record<string, LinkTypeDef>
-  actions: Record<string, AnyActionDef>
+  actions: Record<string, ActionDef<any>>
 }
 
 export function defineOntology(def: OntologyDef): OntologyDef {
@@ -319,54 +236,15 @@ export function defineOntology(def: OntologyDef): OntologyDef {
       if (name === '') throw new Error(`"" is not a valid ${kind} name`)
     }
   }
-  // (type, property) pairs, never a joined string: names are data, and data
-  // does not get to invent delimiters.
-  const viaTwins = new Map<string, Set<string>>()
   for (const [name, link] of Object.entries(def.links)) {
     for (const end of [link.from, link.to]) {
       if (!Object.hasOwn(def.objects, end)) {
         throw new Error(`link "${name}" references unknown object type "${end}"`)
       }
     }
-    if (link.viaProperty !== undefined) {
-      if (link.kind !== 'one-to-many') {
-        throw new Error(`link "${name}": viaProperty implies a foreign key on the "to" side — one-to-many only`)
-      }
-      const to = def.objects[link.to]
-      if (!Object.hasOwn(to.properties, link.viaProperty)) {
-        throw new Error(`link "${name}": viaProperty "${link.viaProperty}" is not a property of ${link.to}`)
-      }
-      // A property mirrors at most one link — two links claiming the same
-      // twin could never both agree with it.
-      let claimed = viaTwins.get(link.to)
-      if (!claimed) viaTwins.set(link.to, (claimed = new Set()))
-      if (claimed.has(link.viaProperty)) {
-        throw new Error(`two links both declare ${link.to}.${link.viaProperty} as their viaProperty`)
-      }
-      claimed.add(link.viaProperty)
-      // The link and its property twin are one fact, so they must sit on the
-      // same side of the authority line — otherwise every consistent change
-      // would straddle it, and nothing could ever move them.
-      const propertyOwned = to.owned === true || (to.owned !== undefined && Object.hasOwn(to.owned, link.viaProperty))
-      if (Boolean(link.owned) !== propertyOwned) {
-        throw new Error(
-          `link "${name}" and its viaProperty ${link.to}.${link.viaProperty} sit on opposite sides of the ` +
-            'authority line — one fact cannot have two owners',
-        )
-      }
-      // A freshly indexed row cannot arrive pre-linked (owned links are out
-      // of a snapshot's reach), so an owned twin's declared default must be
-      // the unlinked state.
-      if (link.owned && to.owned !== true && to.owned?.[link.viaProperty] !== null) {
-        throw new Error(
-          `link "${name}": the ontology-owned viaProperty ${link.to}.${link.viaProperty} needs default null — ` +
-            'a freshly indexed row starts unlinked',
-        )
-      }
-    }
   }
   for (const [name, action] of Object.entries(def.actions)) {
-    if (isTargeted(action) && !Object.hasOwn(def.objects, action.object)) {
+    if (!Object.hasOwn(def.objects, action.object)) {
       throw new Error(`action "${name}" references unknown object type "${action.object}"`)
     }
   }
@@ -387,13 +265,22 @@ export function defineOntology(def: OntologyDef): OntologyDef {
  * possible; see "Failure semantics" in the README.
  *
  * The adapter speaks to the systems of record and to nothing else — the
- * ontology store is the runtime's alone. It receives its own copy of the
- * edit plan, and the observable violation of the boundary (a transaction
- * left open on the store) is rolled back and refused (FOREIGN_TRANSACTION).
+ * ontology store is the runtime's alone. That boundary is a declared
+ * contract, not an enforced one (see "Transaction ownership" in
+ * IMPLEMENTATION.md). The adapter receives its own copy of the edit plan and
+ * of the target object, so nothing it mutates leaks back into the runtime.
  */
 export interface WritebackAdapter {
   name: string
-  apply(edits: Edit[], meta: { action: string; actor: string }): void
+  apply(
+    edits: Edit[],
+    meta: {
+      action: string
+      actor: string
+      /** The action's target, as the runtime loaded it — routing material. */
+      target: { type: string; pk: string; object: Record<string, unknown> }
+    },
+  ): void
 }
 
 // ───────────────────────────── Runtime ─────────────────────────────
@@ -446,13 +333,6 @@ export class Runtime {
   readonly #db: Database
   readonly #writeback?: WritebackAdapter
   readonly #schemas = new Map<string, z.ZodObject<Properties>>()
-  /**
-   * Canonical form of each owned default's schema OUTPUT, per type. The raw
-   * declared default is what load() feeds the schema (input space); this is
-   * what "back at the default" compares against (output space). Keeping the
-   * two apart means schema output is never re-fed as schema input.
-   */
-  readonly #ownedBaseline = new Map<string, Record<string, string>>()
 
   constructor(ontology: OntologyDef, db: Database, opts: { writeback?: WritebackAdapter } = {}) {
     this.ontology = ontology
@@ -460,15 +340,6 @@ export class Runtime {
     this.#writeback = opts.writeback
     for (const [name, obj] of Object.entries(ontology.objects)) {
       this.#schemas.set(name, z.object(obj.properties))
-      if (obj.owned && obj.owned !== true) {
-        const baseline: Record<string, string> = {}
-        for (const [key, fallback] of Object.entries(obj.owned)) {
-          const encoded = canonical((obj.properties[key] as z.ZodType).parse(fallback))
-          if (encoded === undefined) throw new Error(`default for owned property "${key}" must be plain JSON data`)
-          baseline[key] = encoded
-        }
-        this.#ownedBaseline.set(name, baseline)
-      }
     }
     this.#db.exec(`
       CREATE TABLE IF NOT EXISTS objects (
@@ -565,7 +436,6 @@ export class Runtime {
         for (const [from, to] of pairs) insertLink.run(name, from, to)
       }
       this.#validateLinks()
-      this.#validateViaProperties()
     })()
   }
 
@@ -573,7 +443,9 @@ export class Runtime {
    * Reapply the edit layer over a freshly indexed base. Refusals here roll
    * back the whole load: an orphaned patch means the source dropped a row
    * the ontology still holds owned state for — a reconciliation decision the
-   * runtime must not make silently.
+   * runtime must not make silently. A patch carrying a key the model no
+   * longer declares ontology-owned is the schema-evolution twin of the same
+   * problem, refused for the same reason.
    */
   #reapplyOverlay(type: string): void {
     const def = this.ontology.objects[type]!
@@ -672,44 +544,18 @@ export class Runtime {
     return Object.fromEntries(out)
   }
 
-  // ── Write side: there is exactly one door ──
+  // ── Write side: there is exactly one door in the API ──
 
   /**
-   * Execute an action. This is the only way state changes:
-   * validate params → load target (if the action has one) → preconditions →
-   * effects → validate the edit plan (model checks, the authority line, and
-   * a dry run of the commit) → write-back (if declared) →
-   * atomically commit edits + audit entry.
+   * Execute an action. This is the only way the API changes state:
+   * validate params → load target → preconditions → effects → validate the
+   * edit plan (model checks, the authority line, and a dry run of the
+   * commit) → write-back (if declared) → atomically commit edits + audit
+   * entry.
    */
   execute(actionName: string, params: Record<string, unknown>, opts: { actor: string }): ActionResult {
     this.#refuseOpenTransaction('execute')
-    try {
-      return this.#run(actionName, params, opts)
-    } finally {
-      // Every transaction the runtime opens is balanced by the time #run
-      // returns or throws — however it ends. One still open was left by
-      // foreign code (a rule, the adapter), and everything this attempt
-      // wrote, refusal audits included, sits inside it where the caller
-      // could unwind it. Roll the whole intrusion back and put the one
-      // trustworthy fact on the record: the store was tampered with.
-      if (this.#db.inTransaction) {
-        this.#db.exec('ROLLBACK')
-        const violation = reject(
-          'FOREIGN_TRANSACTION',
-          'a rule or the write-back adapter left a transaction open on the ontology store — ' +
-            'rolled back; model code and adapters must not touch this database',
-        )
-        this.#audit({
-          actor: opts.actor,
-          action: actionName,
-          target: '(foreign transaction)',
-          params,
-          status: 'rejected',
-          error: violation,
-        })
-        throw new Error(violation.message)
-      }
-    }
+    return this.#run(actionName, params, opts)
   }
 
   #run(actionName: string, params: Record<string, unknown>, opts: { actor: string }): ActionResult {
@@ -739,23 +585,30 @@ export class Runtime {
       return refuseAs('(unknown action)', params, reject('UNKNOWN_ACTION', `no action named "${actionName}"`))
     }
 
+    const guessTarget = () => {
+      const guessed = params[action.targetParam]
+      return `${action.object}/${guessed != null ? String(guessed) : '(invalid)'}`
+    }
+
+    // Params are stored verbatim in the audit log, so they must be values
+    // the log can hold faithfully — refused here, and still audited (the
+    // audit write falls back to a placeholder for what it cannot encode).
+    if (!isPlainJson(params)) {
+      return refuseAs(guessTarget(), params, reject('INVALID_PARAMS', 'params are not plain JSON data'))
+    }
+
     const parsed = z.object(action.params).safeParse(params)
     if (!parsed.success) {
       const issue = parsed.error.issues[0]
-      const guessed = isTargeted(action) ? params[action.targetParam] : undefined
-      const target = isTargeted(action)
-        ? `${action.object}/${guessed != null ? String(guessed) : '(invalid)'}`
-        : '(targetless)'
       return refuseAs(
-        target,
+        guessTarget(),
         params,
         reject('INVALID_PARAMS', `${issue?.path.join('.') ?? 'params'}: ${issue?.message ?? 'invalid'}`),
       )
     }
 
-    const target = isTargeted(action)
-      ? `${action.object}/${String(parsed.data[action.targetParam])}`
-      : '(targetless)'
+    const pk = String(parsed.data[action.targetParam])
+    const target = `${action.object}/${pk}`
     const refuse = (error: Violation, edits?: Edit[]): ActionResult => refuseAs(target, parsed.data, error, edits)
 
     // Crashes are attempts too, and they are audited with a code that says
@@ -773,37 +626,31 @@ export class Runtime {
       throw e
     }
 
-    let ctx: ActionCtx | TargetlessActionCtx
-    if (isTargeted(action)) {
-      const pk = String(parsed.data[action.targetParam])
-      let object: Record<string, unknown> | undefined
-      try {
-        object = this.#fetch(action.object, pk)
-      } catch (e) {
-        crashedAs('READ_FAILED', e)
-      }
-      if (object !== undefined) {
-        try {
-          // Visibility gates action targets too: an object the actor cannot see
-          // is TARGET_NOT_FOUND — same as a missing one, so existence never leaks.
-          if (!this.#visible(action.object, object, opts.actor)) object = undefined
-        } catch (e) {
-          crashedAs('RULE_CRASHED', e)
-        }
-      }
-      if (!object) return refuse(reject('TARGET_NOT_FOUND', `${target} does not exist`))
-      ctx = { object, params: parsed.data, actor: opts.actor }
-    } else {
-      ctx = { params: parsed.data, actor: opts.actor }
+    let object: Record<string, unknown> | undefined
+    try {
+      object = this.#fetch(action.object, pk)
+    } catch (e) {
+      crashedAs('READ_FAILED', e)
     }
+    if (object !== undefined) {
+      try {
+        // Visibility gates action targets too: an object the actor cannot see
+        // is TARGET_NOT_FOUND — same as a missing one, so existence never leaks.
+        if (!this.#visible(action.object, object, opts.actor)) object = undefined
+      } catch (e) {
+        crashedAs('RULE_CRASHED', e)
+      }
+    }
+    if (!object) return refuse(reject('TARGET_NOT_FOUND', `${target} does not exist`))
+    const ctx: ActionCtx = { object, params: parsed.data, actor: opts.actor }
 
     let edits: Edit[] = []
     try {
       for (const precondition of action.preconditions) {
-        const violation = precondition(ctx as ActionCtx)
+        const violation = precondition(ctx)
         if (violation) return refuse(violation)
       }
-      edits = action.effects(ctx as ActionCtx)
+      edits = action.effects(ctx)
     } catch (e) {
       crashedAs('RULE_CRASHED', e)
     }
@@ -821,15 +668,6 @@ export class Runtime {
     // and the declaration is checked against what the plan actually touches:
     // an undeclared write to source-backed state is exactly the shadow copy
     // the fourth property forbids, whatever the action is named.
-    if (!isTargeted(action)) {
-      try {
-        this.#validateTargetlessScope(edits)
-      } catch (e) {
-        if (e instanceof PlanViolation) return refuse(e.violation)
-        throw e
-      }
-    }
-
     try {
       const authorities = new Set(edits.map((e) => this.#editAuthority(e)))
       if (authorities.size > 1) {
@@ -837,7 +675,7 @@ export class Runtime {
           reject(
             'MIXED_AUTHORITY',
             'the edit plan changes both source-backed and ontology-owned state — ' +
-              'v0.1 routes a plan whole, so split the action along the authority line',
+              'plans are routed whole, so split the action along the authority line',
           ),
         )
       }
@@ -868,10 +706,10 @@ export class Runtime {
     // Dry-run the commit before anything leaves this process: the same code
     // that will apply the plan applies it inside a transaction that is
     // always rolled back. Everything the commit would check — link
-    // endpoints, cardinality, delete restrictions, merged schemas — is
-    // checked here first, so the write-back adapter never sees a plan the
-    // ontology store would refuse. (Single-writer, synchronous: nothing can
-    // change between this dry run and the commit below.)
+    // endpoints, cardinality, merged schemas — is checked here first, so the
+    // write-back adapter never sees a plan the ontology store would refuse.
+    // (Single-writer, synchronous: nothing can change between this dry run
+    // and the commit below.)
     try {
       this.#preflight(edits)
     } catch (e) {
@@ -886,10 +724,13 @@ export class Runtime {
       }
       try {
         // Write-back first: if the system of record refuses, nothing changes
-        // here. The adapter gets its own copy of the plan: what commits below
-        // is the plan that was validated, not whatever the adapter left
-        // behind on a shared reference.
-        this.#writeback.apply(structuredClone(edits), { action: actionName, actor: opts.actor })
+        // here. The adapter gets its own copies: what commits below is the
+        // plan that was validated, not whatever the adapter left behind.
+        this.#writeback.apply(structuredClone(edits), {
+          action: actionName,
+          actor: opts.actor,
+          target: { type: action.object, pk, object: structuredClone(object) },
+        })
       } catch (e) {
         // The adapter may have partially applied the plan before throwing —
         // source-side atomicity is the adapter's contract, not this
@@ -899,10 +740,7 @@ export class Runtime {
       }
     }
 
-    // Edits and their audit entry commit together or not at all. (If foreign
-    // code left a transaction open, this "commit" is a savepoint inside it —
-    // execute()'s exit guard detects that, rolls the whole intrusion back,
-    // and turns the attempt into FOREIGN_TRANSACTION.)
+    // Edits and their audit entry commit together or not at all.
     try {
       this.#db.transaction(() => {
         this.#applyEdits(edits)
@@ -981,8 +819,8 @@ export class Runtime {
   /**
    * Model-only validation of an edit plan — everything provable without
    * reading current state. DB-dependent checks (merged-object schemas, link
-   * endpoints, cardinality, delete restrictions) live in #applyEdits, which
-   * the preflight dry-runs before write-back and the commit runs for real.
+   * endpoints, cardinality) live in #applyEdits, which the preflight
+   * dry-runs before write-back and the commit runs for real.
    */
   #validateEdits(edits: Edit[]): void {
     for (const edit of edits) {
@@ -992,17 +830,15 @@ export class Runtime {
       }
       const def = this.#objectDef(edit.object)
       const schema = this.#schemas.get(edit.object)!
-      if (edit.op === 'create' || edit.op === 'modify') {
-        // Unknown keys are refused, not silently stripped: a stripped key
-        // would still travel to the write-back adapter in the raw edit and
-        // let source and store diverge without a trace.
-        const payload = edit.op === 'create' ? edit.data : edit.changes
-        // Object.hasOwn, not `in`: prototype names (toString, __proto__, …) must
-        // not masquerade as model properties.
-        const unknown = Object.keys(payload).filter((key) => !Object.hasOwn(def.properties, key))
-        if (unknown.length > 0) {
-          throw new Error(`unknown propert${unknown.length > 1 ? 'ies' : 'y'} "${unknown.join('", "')}" on ${edit.object}`)
-        }
+      // Unknown keys are refused, not silently stripped: a stripped key
+      // would still travel to the write-back adapter in the raw edit and
+      // let source and store diverge without a trace. Object.hasOwn, not
+      // `in`: prototype names (toString, __proto__, …) must not masquerade
+      // as model properties.
+      const payload = edit.op === 'create' ? edit.data : edit.changes
+      const unknown = Object.keys(payload).filter((key) => !Object.hasOwn(def.properties, key))
+      if (unknown.length > 0) {
+        throw new Error(`unknown propert${unknown.length > 1 ? 'ies' : 'y'} "${unknown.join('", "')}" on ${edit.object}`)
       }
       if (edit.op === 'create') {
         const data = schema.parse(edit.data)
@@ -1011,7 +847,7 @@ export class Runtime {
             `create pk mismatch for ${edit.object}: edit says "${edit.pk}", data says "${String(data[def.primaryKey])}"`,
           )
         }
-      } else if (edit.op === 'modify') {
+      } else {
         // A modify that changes nothing is not an edit — refusing it here
         // keeps the authority classification total: every edit that reaches
         // it has a side.
@@ -1022,47 +858,6 @@ export class Runtime {
           throw new Error(`cannot modify the primary key of ${edit.object}/${edit.pk}`)
         }
         schema.partial().parse(edit.changes)
-      }
-    }
-  }
-
-  /**
-   * A targetless action skipped the visibility gate because it has no
-   * target — so its plan is held to exactly what the docs promise: create
-   * objects, and wire the objects it created to each other. Anything else —
-   * a modify, a delete, a link endpoint that is not one of its creations —
-   * would turn the missing gate into an existence probe, and is refused.
-   * Identity is tracked as (type, pk) pairs, never a joined string: names
-   * are data, and data does not get to invent delimiters.
-   */
-  #validateTargetlessScope(edits: Edit[]): void {
-    const created = new Map<string, Set<string>>()
-    const outOfScope = (what: string): never => {
-      throw new PlanViolation(
-        reject(
-          'TARGETLESS_SCOPE',
-          `a targetless action may only create objects and wire them to each other — ` +
-            `${what}; anything further needs a targeted action and its visibility gate`,
-        ),
-      )
-    }
-    for (const edit of edits) {
-      if (edit.op === 'create') {
-        let pks = created.get(edit.object)
-        if (!pks) created.set(edit.object, (pks = new Set()))
-        pks.add(edit.pk)
-      } else if (edit.op === 'modify' || edit.op === 'delete') {
-        outOfScope(`${edit.op} is outside that scope`)
-      } else {
-        const linkDef = this.ontology.links[edit.link]!
-        for (const [endType, endPk] of [
-          [linkDef.from, edit.from],
-          [linkDef.to, edit.to],
-        ] as const) {
-          if (!created.get(endType)?.has(endPk)) {
-            outOfScope(`${endType} "${endPk}" is not something this plan created`)
-          }
-        }
       }
     }
   }
@@ -1083,12 +878,11 @@ export class Runtime {
       throw new PlanViolation(
         reject(
           'SOURCE_CREATE_UNSUPPORTED',
-          `cannot create ${edit.object}/${edit.pk}: the type is source-backed, and v0.1 supports creation ` +
+          `cannot create ${edit.object}/${edit.pk}: the type is source-backed, and creation is supported ` +
             'for ontology-owned types only — creating at the source is undemonstrated, so undeclared',
         ),
       )
     }
-    if (edit.op === 'delete') return 'source'
     const ownedKeys = def.owned ? Object.keys(def.owned) : []
     const touched = Object.keys(edit.changes)
     const owned = touched.filter((key) => ownedKeys.includes(key))
@@ -1119,23 +913,14 @@ export class Runtime {
   }
 
   /**
-   * The gate every stored row passes through. The store keeps what a schema
-   * produced and will feed it back to the same schema later, so at every
-   * write the value must be plain JSON data (or it would come back changed)
-   * and a fixed point of its schema (or it would come back refused). Checked
-   * here at the boundary, per value — a declaration alone cannot hold a
-   * conditional transform to it.
+   * The gate every stored row passes through: the store keeps JSON, so the
+   * value must survive the JSON round trip unchanged — or it would come
+   * back a different value. (That the schema also accepts its own output is
+   * the model author's declared contract; see ObjectTypeDef.properties.)
    */
   #storable(type: string, value: Record<string, unknown>): string {
-    const encoded = canonical(value)
-    if (encoded === undefined) {
+    if (!isPlainJson(value)) {
       throw new Error(`${type} row is not plain JSON data — the store cannot hold it faithfully`)
-    }
-    const again = this.#schemas.get(type)!.safeParse(value)
-    if (!again.success || canonical(again.data) !== encoded) {
-      throw new Error(
-        `the ${type} schema does not accept its own output — stored state must be a fixed point of its schema`,
-      )
     }
     return JSON.stringify(value)
   }
@@ -1187,47 +972,7 @@ export class Runtime {
       }
       const def = this.#objectDef(edit.object)
       const schema = this.#schemas.get(edit.object)!
-      if (edit.op === 'modify') {
-        if (Object.hasOwn(edit.changes, def.primaryKey) && edit.changes[def.primaryKey] !== edit.pk) {
-          throw new Error(`cannot modify the primary key of ${edit.object}/${edit.pk}`)
-        }
-        const current = this.#fetch(edit.object, edit.pk)
-        if (!current) throw new Error(`cannot modify missing object ${edit.object}/${edit.pk}`)
-        const next = schema.parse({ ...current, ...edit.changes })
-        this.#db
-          .prepare('UPDATE objects SET data = ? WHERE type = ? AND pk = ?')
-          .run(this.#storable(edit.object, next), edit.object, edit.pk)
-        // Ontology-owned changes on a source-backed row also land in the
-        // overlay — the layer load() reapplies over a re-indexed base. A
-        // value back at its declared default is pruned, so clearing an edit
-        // clears the survival obligation with it. The patch stores what the
-        // schema produced — the same normal form as the materialized row and
-        // the (normalized) declared default — compared canonically, so
-        // transforms and key order cannot fake or hide "back at default".
-        if (def.owned && def.owned !== true && this.#editAuthority(edit) === 'ontology') {
-          const row = this.#db
-            .prepare('SELECT patch FROM overlay WHERE type = ? AND pk = ?')
-            .get(edit.object, edit.pk) as { patch: string } | undefined
-          const patch: Record<string, unknown> = row ? (JSON.parse(row.patch) as Record<string, unknown>) : {}
-          const baseline = this.#ownedBaseline.get(edit.object) ?? {}
-          for (const key of Object.keys(edit.changes)) {
-            const value = (next as Record<string, unknown>)[key]
-            const encoded = canonical(value)
-            if (encoded === undefined) {
-              throw new Error(`ontology-owned edit to ${edit.object}/${edit.pk}.${key} is not plain JSON data`)
-            }
-            if (Object.hasOwn(baseline, key) && encoded === baseline[key]) delete patch[key]
-            else patch[key] = value
-          }
-          if (Object.keys(patch).length === 0) {
-            this.#db.prepare('DELETE FROM overlay WHERE type = ? AND pk = ?').run(edit.object, edit.pk)
-          } else {
-            this.#db
-              .prepare('INSERT OR REPLACE INTO overlay (type, pk, patch) VALUES (?, ?, ?)')
-              .run(edit.object, edit.pk, JSON.stringify(patch))
-          }
-        }
-      } else if (edit.op === 'create') {
+      if (edit.op === 'create') {
         const data = schema.parse(edit.data)
         if (String(data[def.primaryKey]) !== edit.pk) {
           throw new Error(
@@ -1237,41 +982,43 @@ export class Runtime {
         this.#db
           .prepare('INSERT INTO objects (type, pk, data) VALUES (?, ?, ?)')
           .run(edit.object, edit.pk, this.#storable(edit.object, data))
-      } else {
-        // RESTRICT: an object with links still attached refuses to die — unlink first.
-        for (const [name, link] of Object.entries(this.ontology.links)) {
-          const columns = [
-            ...(link.from === edit.object ? ['from_pk'] : []),
-            ...(link.to === edit.object ? ['to_pk'] : []),
-          ]
-          for (const column of columns) {
-            const { n } = this.#db
-              .prepare(`SELECT COUNT(*) AS n FROM links WHERE name = ? AND ${column} = ?`)
-              .get(name, edit.pk) as { n: number }
-            if (n > 0) {
-              throw new Error(
-                `cannot delete ${edit.object}/${edit.pk}: ${n} "${name}" link(s) attached — unlink first`,
-              )
-            }
-          }
-        }
-        // A delete is a source-authority decision, and it must not smuggle
-        // away state the ontology owns — the same rule re-indexing follows.
-        // A row still carrying owned edits refuses to die; clearing them is
-        // an action too, so even this stays inside the write gate.
-        const pending = this.#db
+        continue
+      }
+      // modify
+      if (Object.hasOwn(edit.changes, def.primaryKey) && edit.changes[def.primaryKey] !== edit.pk) {
+        throw new Error(`cannot modify the primary key of ${edit.object}/${edit.pk}`)
+      }
+      const current = this.#fetch(edit.object, edit.pk)
+      if (!current) throw new Error(`cannot modify missing object ${edit.object}/${edit.pk}`)
+      const next = schema.parse({ ...current, ...edit.changes })
+      this.#db
+        .prepare('UPDATE objects SET data = ? WHERE type = ? AND pk = ?')
+        .run(this.#storable(edit.object, next), edit.object, edit.pk)
+      // Ontology-owned changes on a source-backed row also land in the
+      // overlay — the layer load() reapplies over a re-indexed base. A
+      // value set back to its declared default is pruned (compared
+      // structurally, so key order cannot hide "back at default"): clearing
+      // an edit clears the survival obligation with it.
+      if (def.owned && def.owned !== true && this.#editAuthority(edit) === 'ontology') {
+        const defaults = def.owned
+        const row = this.#db
           .prepare('SELECT patch FROM overlay WHERE type = ? AND pk = ?')
           .get(edit.object, edit.pk) as { patch: string } | undefined
-        if (pending) {
-          throw new Error(
-            `cannot delete ${edit.object}/${edit.pk}: it still carries ontology-owned edits ` +
-              `(${Object.keys(JSON.parse(pending.patch) as Record<string, unknown>).join(', ')}) — clear them first`,
-          )
+        const patch: Record<string, unknown> = row ? (JSON.parse(row.patch) as Record<string, unknown>) : {}
+        for (const key of Object.keys(edit.changes)) {
+          const value = (next as Record<string, unknown>)[key]
+          if (isDeepStrictEqual(value, defaults[key])) delete patch[key]
+          else patch[key] = value
         }
-        this.#db.prepare('DELETE FROM objects WHERE type = ? AND pk = ?').run(edit.object, edit.pk)
+        if (Object.keys(patch).length === 0) {
+          this.#db.prepare('DELETE FROM overlay WHERE type = ? AND pk = ?').run(edit.object, edit.pk)
+        } else {
+          this.#db
+            .prepare('INSERT OR REPLACE INTO overlay (type, pk, patch) VALUES (?, ?, ?)')
+            .run(edit.object, edit.pk, JSON.stringify(patch))
+        }
       }
     }
-    this.#validateViaProperties()
   }
 
   /** The indexed snapshot must satisfy the model's constraints, same as edits do. */
@@ -1299,39 +1046,6 @@ export class Runtime {
     }
   }
 
-  /**
-   * A link with a viaProperty and its foreign-key property twin are two
-   * representations of one fact, and they must agree — after indexing and
-   * after every edit plan. Full scan by declaration: keeping this fast is
-   * indexing infrastructure, which is an implementation concern, not part
-   * of the pattern.
-   */
-  #validateViaProperties(): void {
-    for (const [name, link] of Object.entries(this.ontology.links)) {
-      if (link.viaProperty === undefined) continue
-      const parentOf = new Map<string, string>()
-      const linkRows = this.#db
-        .prepare('SELECT from_pk, to_pk FROM links WHERE name = ?')
-        .all(name) as Array<{ from_pk: string; to_pk: string }>
-      for (const { from_pk, to_pk } of linkRows) parentOf.set(to_pk, from_pk)
-      const objectRows = this.#db
-        .prepare('SELECT pk, data FROM objects WHERE type = ?')
-        .all(link.to) as Array<{ pk: string; data: string }>
-      for (const { pk, data } of objectRows) {
-        const raw = (JSON.parse(data) as Record<string, unknown>)[link.viaProperty]
-        const value = raw == null ? null : String(raw)
-        const linked = parentOf.get(pk) ?? null
-        if (value !== linked) {
-          throw new Error(
-            `link "${name}" disagrees with ${link.to}.${link.viaProperty} for ${link.to}/${pk}: ` +
-              `the property says ${value === null ? 'none' : `"${value}"`}, ` +
-              `the links say ${linked === null ? 'none' : `"${linked}"`}`,
-          )
-        }
-      }
-    }
-  }
-
   #audit(entry: {
     actor: string
     action: string
@@ -1351,12 +1065,27 @@ export class Runtime {
         entry.actor,
         entry.action,
         entry.target,
-        JSON.stringify(entry.params),
+        safeJson(entry.params),
         entry.status,
         entry.error ? JSON.stringify(entry.error) : null,
-        entry.edits ? JSON.stringify(entry.edits) : null,
+        entry.edits ? safeJson(entry.edits) : null,
       )
   }
+}
+
+/**
+ * The audit write must never be the thing that fails: a value the log cannot
+ * encode is recorded as a placeholder, because a lost audit entry is worse
+ * than a lossy one.
+ */
+function safeJson(value: unknown): string {
+  try {
+    const encoded = JSON.stringify(value)
+    if (typeof encoded === 'string') return encoded
+  } catch {
+    // fall through to the placeholder
+  }
+  return JSON.stringify({ $unserializable: String(value) })
 }
 
 export function createRuntime(

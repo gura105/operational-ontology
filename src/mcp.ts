@@ -16,10 +16,10 @@
  */
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js'
 import { z } from 'zod'
-import { isTargeted, type Runtime } from './core.js'
+import type { Runtime } from './core.js'
 
 export function buildMcpServer(rt: Runtime, opts: { agent?: string } = {}): McpServer {
-  const server = new McpServer({ name: `operational-ontology:${rt.ontology.name}`, version: '0.1.0' })
+  const server = new McpServer({ name: `operational-ontology:${rt.ontology.name}`, version: '0.2.0' })
   // Tool names are derived from model names, so two model names can collide
   // after snake-casing (object `Order` ⇒ search_order, action `searchOrder`
   // ⇒ search_order). Fail at build time with both origins named.
@@ -150,7 +150,7 @@ export function buildMcpServer(rt: Runtime, opts: { agent?: string } = {}): McpS
       toolName(snake(actionName), `action ${actionName}`),
       {
         description:
-          `${action.description ?? (isTargeted(action) ? `Action on ${action.object}.` : 'Action.')} ` +
+          `${action.description ?? `Action on ${action.object}.`} ` +
           'Writes are gated: if a business rule rejects this call, the error is ' +
           'machine-readable ({ code, message }) and the attempt is recorded in the audit log.',
         inputSchema: action.params,

@@ -6,7 +6,7 @@
  *   refuse a write → watch an allowed write reach the system of record.
  */
 import Database from 'better-sqlite3'
-import { createRuntime, type Runtime } from '../../src/core.js'
+import { createRuntime } from '../../src/core.js'
 import { createFixtures } from './fixtures.js'
 import { integrate } from './integrate.js'
 import { orders } from './ontology.js'
@@ -23,9 +23,7 @@ console.log('south.SALES_ORDER:    ', legacy.south.prepare('SELECT * FROM SALES_
 // ── 2. Integrate + index (the data-layer hand-off) ──────────────────────
 h('2. Integrate and index into the ontology store')
 const snapshot = integrate(legacy)
-let rt: Runtime
-const adapter = createErpAdapter(legacy, (pk) => rt.get('Order', pk, { actor: 'system:writeback' }))
-rt = createRuntime(orders, new Database(':memory:'), { writeback: adapter })
+const rt = createRuntime(orders, new Database(':memory:'), { writeback: createErpAdapter(legacy) })
 rt.load(snapshot)
 console.log(
   `indexed: ${snapshot.objects.Customer.length} customers, ` +
@@ -44,10 +42,13 @@ for (const o of rt.traverse<{ id: string; status: string; total: number }>('cust
 console.log('who ordered Keyboard (reverse traversal):',
   rt.traverse<{ id: string }>('orderProducts', 'ITM-101', { ...hq, direction: 'reverse' }).map((o) => o.id))
 console.log('pending order value by region:',
-  rt.aggregate<{ status: string; total: number; customerId: string }>('Order', {
+  rt.aggregate<{ id: string; status: string; total: number }>('Order', {
     ...hq,
     filter: { status: 'pending' },
-    groupBy: (o) => rt.get<{ region: string }>('Customer', o.customerId, hq)?.region ?? 'unknown',
+    // The customer relationship lives in the link, so the region comes from
+    // a reverse traversal — not from a duplicated FK property.
+    groupBy: (o) =>
+      rt.traverse<{ region: string }>('customerOrders', o.id, { ...hq, direction: 'reverse' })[0]?.region ?? 'unknown',
     sum: (o) => o.total,
   }))
 console.log('same search, different actors (visibility lives in the model):')
@@ -61,7 +62,7 @@ console.log('assignOrder(N-A-1002 → alice):', rt.execute('assignOrder', { orde
 h('5. Write: a business rule refuses')
 const refused = rt.execute('cancelOrder', { orderId: 'N-A-1001', reason: 'customer changed their mind' }, { actor: 'user:hq' })
 console.log('cancelOrder(N-A-1001) →', JSON.stringify(refused, null, 2))
-console.log('(N-A-1001 already shipped — the rule lives in the model, so no caller can bypass it)')
+console.log('(N-A-1001 already shipped — the rule lives in the model, so every caller meets the same refusal)')
 
 h('6. Write: an allowed cancel reaches the system of record')
 const before = legacy.south.prepare("SELECT ORDER_ID, ORDER_STATUS FROM SALES_ORDER WHERE ORDER_ID = 'SO-77'").get()
@@ -72,8 +73,7 @@ console.log('south.SALES_ORDER after: ', after, ' ← write-back reached the leg
 
 // ── 7. Re-indexing: the sources move on, the ontology's own state survives ──
 h('7. Re-index: ontology-owned state survives, source truth refreshes')
-rt.execute('fileNote', { noteId: 'NOTE-1', text: 'audit all N- orders before the north system sunsets', author: 'hq-ops' }, { actor: 'user:hq' })
-rt.execute('attachNote', { orderId: 'N-A-1002', noteId: 'NOTE-1' }, { actor: 'user:hq' })
+rt.execute('addOrderNote', { orderId: 'N-A-1002', noteId: 'NOTE-1', text: 'audit all N- orders before the north system sunsets', author: 'hq-ops' }, { actor: 'user:hq' })
 rt.load(integrate(legacy)) // the pipeline runs again over the live legacy systems
 const reindexed = rt.get<{ assignee: string | null; status: string }>('Order', 'N-A-1002', hq)!
 console.log(`assignee of N-A-1002:  ${reindexed.assignee}  ← ontology-owned, survived the re-index`)

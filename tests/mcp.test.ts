@@ -8,7 +8,7 @@ import Database from 'better-sqlite3'
 import { z } from 'zod'
 import { Client } from '@modelcontextprotocol/sdk/client/index.js'
 import { InMemoryTransport } from '@modelcontextprotocol/sdk/inMemory.js'
-import { createRuntime, defineAction, defineObject, defineOntology, type Runtime } from '../src/core.js'
+import { createRuntime, defineAction, defineObject, defineOntology } from '../src/core.js'
 import { buildMcpServer } from '../src/mcp.js'
 import { createFixtures } from './helpers/tmp-fixtures.js'
 import { integrate } from '../examples/orders/integrate.js'
@@ -17,9 +17,7 @@ import { createErpAdapter } from '../examples/orders/erp-adapter.js'
 
 async function connectedClient() {
   const legacy = createFixtures()
-  let rt: Runtime
-  const adapter = createErpAdapter(legacy, (pk) => rt.get('Order', pk, { actor: 'system:writeback' }))
-  rt = createRuntime(orders, new Database(':memory:'), { writeback: adapter })
+  const rt = createRuntime(orders, new Database(':memory:'), { writeback: createErpAdapter(legacy) })
   rt.load(integrate(legacy))
 
   const server = buildMcpServer(rt)
@@ -33,14 +31,13 @@ test('the tool surface is generated from the model — and contains no raw data 
   const { client } = await connectedClient()
   const tools = (await client.listTools()).tools.map((t) => t.name).sort()
   assert.deepEqual(tools, [
+    'add_order_note',
     'aggregate_customer',
     'aggregate_note',
     'aggregate_order',
     'aggregate_product',
     'assign_order',
-    'attach_note',
     'cancel_order',
-    'file_note',
     'get_customer',
     'get_note',
     'get_order',
@@ -157,18 +154,13 @@ test('wrapped numeric properties (nullable/optional/defaulted/stacked) are still
   }
 })
 
-test('a targetless agent write creates ontology-owned state that survives re-indexing', async () => {
+test('an agent write creates ontology-owned state that survives re-indexing', async () => {
   const { client, rt, legacy } = await connectedClient()
   const filed = await client.callTool({
-    name: 'file_note',
-    arguments: { noteId: 'NOTE-1', text: 'audit the north orders', author: 'agent-ops' },
+    name: 'add_order_note',
+    arguments: { orderId: 'N-A-1002', noteId: 'NOTE-1', text: 'audit the north orders', author: 'agent-ops' },
   })
   assert.notEqual(filed.isError, true)
-  const attached = await client.callTool({
-    name: 'attach_note',
-    arguments: { orderId: 'N-A-1002', noteId: 'NOTE-1' },
-  })
-  assert.notEqual(attached.isError, true)
   // The pipeline runs again over the live legacy systems.
   rt.load(integrate(legacy))
   const traverse = await client.callTool({

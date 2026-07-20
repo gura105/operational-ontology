@@ -1,6 +1,6 @@
 {
   "name": "operational-ontology",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "private": true,
   "description": "A minimal, readable reference implementation of the Operational Ontology pattern. Palantir Foundry is one implementation; this is the concept, minimized.",
   "type": "module",
