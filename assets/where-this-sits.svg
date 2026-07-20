@@ -1,0 +1,78 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1200 960" role="img" aria-labelledby="title desc">
+  <title id="title">Where the operational ontology sits</title>
+  <desc id="desc">A three-layer stack maps applications, the operational ontology, and the data layer to their Foundry and repository implementations. The repository implements the middle layer and owns its store. Contracts at the ontology-data seam define integrated input and governed write-back.</desc>
+
+  <defs>
+    <style>
+      text {
+        font-family: system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", Helvetica, Arial, sans-serif;
+      }
+    </style>
+  </defs>
+
+  <rect width="1200" height="960" fill="#FFFFFF"/>
+
+  <!-- One stack, with the pattern at left and two concrete implementations at right. -->
+  <rect x="54" y="104" width="1092" height="786" rx="44" fill="#FFFFFF" stroke="#20242A" stroke-width="3"/>
+  <path d="M 54 166 H 1146 M 54 340 H 1146 M 54 556 H 1146 M 54 716 H 1146" fill="none" stroke="#5B626B" stroke-width="2.5"/>
+
+  <!-- Column headings -->
+  <text x="96" y="143" font-size="16" font-weight="700" letter-spacing="1.4" fill="#747B84">PATTERN LAYER</text>
+  <text x="565" y="143" text-anchor="middle" font-size="16" font-weight="700" letter-spacing="1.4" fill="#747B84">IN FOUNDRY</text>
+  <text x="935" y="143" text-anchor="middle" font-size="16" font-weight="700" letter-spacing="1.4" fill="#747B84">IN THIS REPO</text>
+
+  <!-- Applications layer -->
+  <text x="96" y="236" font-size="25" font-weight="740" fill="#20242A">applications</text>
+  <text x="96" y="267" font-size="18" font-weight="500" fill="#747B84">consumer surfaces</text>
+
+  <rect x="410" y="194" width="310" height="118" rx="20" fill="#F4F5F6" stroke="#5B626B" stroke-width="2.5"/>
+  <text x="565" y="243" text-anchor="middle" font-size="19" font-weight="680" fill="#20242A">Workshop · Slate · OSDK</text>
+  <text x="565" y="274" text-anchor="middle" font-size="19" font-weight="680" fill="#20242A">AIP agents</text>
+
+  <rect x="780" y="194" width="310" height="118" rx="20" fill="#F4F5F6" stroke="#5B626B" stroke-width="2.5"/>
+  <text x="935" y="263" text-anchor="middle" font-size="22" font-weight="700" fill="#20242A">CLI demo + MCP agents</text>
+
+  <!-- The repository implements this whole middle layer, not one application cell. -->
+  <rect x="74" y="358" width="1052" height="180" rx="28" fill="#F8F9FA" stroke="#343A42" stroke-width="2.5"/>
+  <text x="96" y="405" font-size="22" font-weight="760" letter-spacing="1.2" fill="#20242A">OPERATIONAL</text>
+  <text x="96" y="434" font-size="22" font-weight="760" letter-spacing="1.2" fill="#20242A">ONTOLOGY</text>
+  <text x="96" y="469" font-size="17" font-weight="520" fill="#5B626B">objects · links · actions · audit</text>
+  <rect x="96" y="487" width="116" height="31" rx="8" fill="#20242A"/>
+  <text x="154" y="509" text-anchor="middle" font-size="15" font-weight="760" letter-spacing="1.1" fill="#FFFFFF">THIS REPO</text>
+
+  <rect x="410" y="389" width="310" height="118" rx="20" fill="#FFFFFF" stroke="#5B626B" stroke-width="2.5"/>
+  <text x="565" y="457" text-anchor="middle" font-size="22" font-weight="700" fill="#20242A">Foundry Ontology</text>
+
+  <rect x="780" y="380" width="310" height="136" rx="20" fill="#FFFFFF" stroke="#5B626B" stroke-width="2.5"/>
+  <text x="935" y="423" text-anchor="middle" font-size="18" font-weight="650" fill="#20242A">reference implementation</text>
+  <text x="935" y="463" text-anchor="middle" font-size="21" font-weight="730" fill="#20242A">owns its own store</text>
+  <text x="935" y="491" text-anchor="middle" font-size="17" font-weight="500" fill="#747B84">(edits live here)</text>
+
+  <!-- Two directions share the ontology-data seam; only governed write-back is accented. -->
+  <text x="96" y="585" font-size="15" font-weight="700" letter-spacing="1.3" fill="#747B84">ONTOLOGY ↔ DATA SEAM</text>
+
+  <rect x="96" y="596" width="486" height="96" rx="18" fill="#F4F5F6" stroke="#9299A1" stroke-width="2"/>
+  <path d="M 126 664 V 621 M 126 621 L 117 633 M 126 621 L 135 633" fill="none" stroke="#9299A1" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"/>
+  <text x="158" y="629" font-size="15" font-weight="750" letter-spacing="1.1" fill="#5B626B">UPSTREAM CONTRACT</text>
+  <text x="158" y="660" font-size="19" font-weight="600" fill="#20242A">integrated physical data is given</text>
+
+  <rect x="600" y="596" width="490" height="96" rx="18" fill="#FFF1DE" stroke="#C96A00" stroke-width="2.5"/>
+  <path d="M 630 621 V 664 M 630 664 L 621 652 M 630 664 L 639 652" fill="none" stroke="#C96A00" stroke-width="3.5" stroke-linecap="round" stroke-linejoin="round"/>
+  <text x="662" y="625" font-size="15" font-weight="750" letter-spacing="1.1" fill="#C96A00">DOWNSTREAM CONTRACT</text>
+  <text x="662" y="651" font-size="18" font-weight="680" fill="#20242A">write-back is a governed side effect,</text>
+  <text x="662" y="677" font-size="18" font-weight="600" fill="#20242A">not a distributed transaction</text>
+
+  <!-- Data layer -->
+  <text x="96" y="778" font-size="25" font-weight="740" fill="#20242A">data layer</text>
+  <text x="96" y="812" font-size="17" font-weight="520" fill="#5B626B">pipelines · dataset versioning</text>
+  <text x="96" y="839" font-size="17" font-weight="520" fill="#5B626B">indexing infrastructure</text>
+
+  <rect x="410" y="744" width="310" height="118" rx="20" fill="#F4F5F6" stroke="#5B626B" stroke-width="2.5"/>
+  <text x="565" y="793" text-anchor="middle" font-size="19" font-weight="680" fill="#20242A">Pipeline Builder · transforms</text>
+  <text x="565" y="824" text-anchor="middle" font-size="19" font-weight="680" fill="#20242A">datasets · Funnel / OSv2</text>
+
+  <rect x="780" y="744" width="310" height="118" rx="20" fill="#F4F5F6" stroke="#5B626B" stroke-width="2.5"/>
+  <text x="935" y="812" text-anchor="middle" font-size="22" font-weight="700" fill="#20242A">fixtures + raw SQL</text>
+
+  <text x="1150" y="933" text-anchor="end" font-size="16" font-weight="500" fill="#747B84">github.com/gura105/operational-ontology</text>
+</svg>
