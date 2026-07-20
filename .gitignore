@@ -2,3 +2,11 @@ node_modules/
 examples/**/.data/
 *.db
 dist/
+
+# local workspace state
+.claude/
+.DS_Store
+
+# generated demo media (recordings live in the media issue; reproduce with vhs assets/*.tape)
+assets/*.gif
+assets/*.mp4
