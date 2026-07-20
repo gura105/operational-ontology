@@ -33,7 +33,7 @@ The demo uses the scenario from the [article this repository accompanies](https:
 - a re-index of the live legacy systems, where order data refreshes from the ERP while the assignment and notes — state the ontology itself owns — survive
 - every attempt, applied or refused, recorded in the audit log
 
-![Terminal recording of pnpm demo: a shipped order's cancellation is refused, an allowed cancellation reaches the legacy ERP, ontology-owned state survives a re-index, and the audit log holds applied and rejected attempts alike.](./assets/demo.gif)
+https://github.com/user-attachments/assets/02bb8ca0-a476-4e33-b0ea-25c46c6e9dda
 
 ## The four properties
 
@@ -99,7 +99,7 @@ The MCP tool surface is generated from the model: `search_order`, `traverse_cust
 
 Reads are scoped the same way. Every query runs as an actor — the identity on whose behalf the call is made — and visibility policies attached to the model decide which objects that actor can see. Agent sessions are no exception; the audit log is the one declared exception, an unscoped administrative view. Over stdio all callers collapse into one actor. `OO_AGENT=<name> pnpm mcp` names that actor, which is labeling, not authentication.
 
-![An agent (Claude Code) is asked to cancel every order of a customer. One cancellation is applied; the shipped order is refused with SHIPPED_ORDER_CANNOT_BE_CANCELLED, so the agent files a note on it instead — and the audit log records all three attempts under agent:claude-code.](./assets/demo-mcp.gif)
+https://github.com/user-attachments/assets/3ddfdd1d-b455-48bc-8c65-7ea74f974855
 
 **Business rules live in the ontology, not in the prompt.**
 
