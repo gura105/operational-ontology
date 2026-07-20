@@ -17,7 +17,6 @@ const NORTH_CODE: Record<string, number> = { pending: 0, shipped: 1, cancelled: 
 
 export function createErpAdapter(dbs: LegacyDbs): WritebackAdapter {
   return {
-    name: 'legacy-erp',
     apply(edits: Edit[], meta) {
       for (const edit of edits) {
         if (edit.op !== 'modify' || edit.object !== 'Order' || edit.pk !== meta.target.pk) {

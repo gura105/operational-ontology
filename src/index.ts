@@ -5,6 +5,7 @@ export {
   defineOntology,
   createRuntime,
   Runtime,
+  declarations,
   reject,
   modify,
   create,

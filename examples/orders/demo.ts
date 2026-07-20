@@ -30,6 +30,7 @@ console.log(
     `${snapshot.objects.Order.length} orders, ${snapshot.objects.Product.length} products, ` +
     `${snapshot.links.customerOrders.length + snapshot.links.orderProducts.length} link rows`,
 )
+console.log('declared semantics:', rt.declarations)
 
 // ── 3. Read side: query the model, not the tables — always as someone ───
 h('3. Read: traverse links, aggregate at query time')
@@ -71,17 +72,25 @@ console.log('cancelOrder(S-SO-77):', rt.execute('cancelOrder', { orderId: 'S-SO-
 const after = legacy.south.prepare("SELECT ORDER_ID, ORDER_STATUS FROM SALES_ORDER WHERE ORDER_ID = 'SO-77'").get()
 console.log('south.SALES_ORDER after: ', after, ' ← write-back reached the legacy system')
 
-// ── 7. Re-indexing: the sources move on, the ontology's own state survives ──
-h('7. Re-index: ontology-owned state survives, source truth refreshes')
+// ── 7. Failure semantics: write-back-first, observable ──────────────────
+h('7. Write: the source refuses a stale write (write-back-first)')
+legacy.south.prepare("UPDATE SALES_ORDER SET ORDER_STATUS = 'SHIPPED' WHERE ORDER_ID = 'SO-79'").run()
+const stale = rt.execute('cancelOrder', { orderId: 'S-SO-79', reason: 'no longer needed' }, { actor: 'user:hq' })
+console.log("the ERP shipped SO-79 behind the ontology's back; cancelOrder(S-SO-79) →", JSON.stringify(stale, null, 2))
+console.log(`status here is still "${rt.get<{ status: string }>('Order', 'S-SO-79', hq)!.status}" — write-back ran first, the source refused, nothing changed locally`)
+
+// ── 8. Re-indexing: the sources move on, the ontology's own state survives ──
+h('8. Re-index: ontology-owned state survives, source truth refreshes')
 rt.execute('addOrderNote', { orderId: 'N-A-1002', noteId: 'NOTE-1', text: 'audit all N- orders before the north system sunsets', author: 'hq-ops' }, { actor: 'user:hq' })
 rt.load(integrate(legacy)) // the pipeline runs again over the live legacy systems
 const reindexed = rt.get<{ assignee: string | null; status: string }>('Order', 'N-A-1002', hq)!
 console.log(`assignee of N-A-1002:  ${reindexed.assignee}  ← ontology-owned, survived the re-index`)
 console.log('notes on N-A-1002:    ', rt.traverse<{ text: string }>('orderNotes', 'N-A-1002', hq).map((n) => n.text))
 console.log(`status of S-SO-77:     ${rt.get<{ status: string }>('Order', 'S-SO-77', hq)!.status}  ← source-backed, refreshed from the ERP (where the cancellation held)`)
+console.log(`status of S-SO-79:     ${rt.get<{ status: string }>('Order', 'S-SO-79', hq)!.status}  ← the truth the source defended in step 7, arriving with the re-index`)
 
-// ── 8. Everything is on the record ──────────────────────────────────────
-h('8. Audit log (applied AND rejected attempts)')
+// ── 9. Everything is on the record ──────────────────────────────────────
+h('9. Audit log (applied AND rejected attempts)')
 for (const e of rt.auditLog()) {
   console.log(`  #${e.seq} ${e.status.padEnd(8)} ${e.action}(${e.target}) by ${e.actor}${e.error ? ` — ${e.error.code}` : ''}`)
 }

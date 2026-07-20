@@ -227,15 +227,6 @@ export interface OntologyDef {
 }
 
 export function defineOntology(def: OntologyDef): OntologyDef {
-  for (const [kind, record] of [
-    ['object type', def.objects],
-    ['link type', def.links],
-    ['action', def.actions],
-  ] as const) {
-    for (const name of Object.keys(record)) {
-      if (name === '') throw new Error(`"" is not a valid ${kind} name`)
-    }
-  }
   for (const [name, link] of Object.entries(def.links)) {
     for (const end of [link.from, link.to]) {
       if (!Object.hasOwn(def.objects, end)) {
@@ -254,24 +245,15 @@ export function defineOntology(def: OntologyDef): OntologyDef {
 // ───────────────────────────── Write-back ─────────────────────────────
 
 /**
- * Propagates an action's edits toward the systems of record.
- *
- * The pattern leaves the consistency mechanism between the ontology and the
- * systems of record implementation-defined, but requires it to be declared.
- * This implementation declares write-back-first ordering (mirroring Foundry's
- * write-back webhooks): the adapter runs BEFORE the edits are committed to
- * the ontology store. If the adapter throws, no ontology changes are applied.
- * The reverse failure — adapter succeeded, local commit fails — remains
- * possible; see "Failure semantics" in the README.
- *
- * The adapter speaks to the systems of record and to nothing else — the
- * ontology store is the runtime's alone. That boundary is a declared
- * contract, not an enforced one (see "Transaction ownership" in
- * IMPLEMENTATION.md). The adapter receives its own copy of the edit plan and
- * of the target object, so nothing it mutates leaks back into the runtime.
+ * Propagates an action's edits toward the systems of record, running BEFORE
+ * the local commit — write-back-first, the declared failure semantics (see
+ * "Failure semantics" in the README). The adapter speaks to the systems of
+ * record and to nothing else; that boundary is a declared contract, not an
+ * enforced one (see "Transaction ownership" in IMPLEMENTATION.md). It
+ * receives its own copies of the plan and the target object, so nothing it
+ * mutates leaks back into the runtime.
  */
 export interface WritebackAdapter {
-  name: string
   apply(
     edits: Edit[],
     meta: {
@@ -284,13 +266,6 @@ export interface WritebackAdapter {
 }
 
 // ───────────────────────────── Runtime ─────────────────────────────
-
-/** Internal: a Violation surfacing through plan classification. */
-class PlanViolation extends Error {
-  constructor(readonly violation: Violation) {
-    super(violation.message)
-  }
-}
 
 /** Internal: the sentinel that rolls a preflight transaction back. */
 class Rollback extends Error {}
@@ -323,6 +298,20 @@ export interface AggregateOptions<O> {
 }
 
 /**
+ * The four answers this implementation declares, as one enumerable value —
+ * the same move the model makes: a declaration you can read at runtime, not
+ * prose you have to trust. Authority is the model's half of the bargain
+ * (`owned`, `writeback`, checked per edit plan); the other three are the
+ * runtime's. Each is unpacked in the README and IMPLEMENTATION.md.
+ */
+export const declarations = {
+  authority: 'model-declared-runtime-checked',
+  failureSemantics: 'write-back-first',
+  reindexing: 'replace-base-reapply-owned-overlay',
+  visibilityDefault: 'fail-open',
+} as const
+
+/**
  * The ontology's own store — object state, user edits, and the audit log —
  * separate from the source systems it was indexed from. A read-only layer
  * could stay virtual; a layer that accepts writes has to own state
@@ -330,6 +319,7 @@ export interface AggregateOptions<O> {
  */
 export class Runtime {
   readonly ontology: OntologyDef
+  readonly declarations = declarations
   readonly #db: Database
   readonly #writeback?: WritebackAdapter
   readonly #schemas = new Map<string, z.ZodObject<Properties>>()
@@ -371,21 +361,13 @@ export class Runtime {
   // ── Indexing (the data-layer hand-off) ──
 
   /**
-   * Load a snapshot of integrated physical data into the ontology store.
-   * This is the stand-in for the indexing pipeline (Funnel's job in Foundry).
-   * It is an infrastructure entry point, not a user write path — user writes
-   * go through `execute`.
-   *
-   * Snapshot semantics, per loaded type: replace the base, reapply the edit
-   * layer. A source snapshot speaks only for source-backed state: rows of an
-   * ontology-owned type, instances of an ontology-owned link, and values for
-   * ontology-owned properties are all refused — the source has no authority
-   * over them. Owned properties start at their declared defaults and get the
-   * overlay's current patch reapplied on top; owned types and links are
-   * simply left alone. An overlay patch whose base row disappeared refuses
-   * the whole load (state the ontology owns must not be dropped silently) —
-   * clear the edit or restore the row, then re-load. The result must satisfy
-   * the model's constraints, the same as edits.
+   * Load a snapshot of integrated physical data into the ontology store —
+   * the stand-in for the indexing pipeline, an infrastructure entry point
+   * rather than a user write path. Semantics, per loaded type: replace the
+   * base, reapply the edit layer. A snapshot speaks only for source-backed
+   * state, so anything ontology-owned in it is refused, and an overlay
+   * patch whose base row disappeared refuses the whole load. Details:
+   * "Re-indexing vs edits" in IMPLEMENTATION.md.
    */
   load(snapshot: {
     objects?: Record<string, Record<string, unknown>[]>
@@ -548,17 +530,14 @@ export class Runtime {
 
   /**
    * Execute an action. This is the only way the API changes state:
-   * validate params → load target → preconditions → effects → validate the
-   * edit plan (model checks, the authority line, and a dry run of the
-   * commit) → write-back (if declared) → atomically commit edits + audit
-   * entry.
+   * validate params → load target → preconditions → effects → dry-run the
+   * whole plan through the commit's own code → check the authority
+   * declaration → write-back (if declared) → atomically commit edits +
+   * audit entry. Validity precedes authority: a plan the store would refuse
+   * is INVALID_EDITS, whatever else it is.
    */
   execute(actionName: string, params: Record<string, unknown>, opts: { actor: string }): ActionResult {
     this.#refuseOpenTransaction('execute')
-    return this.#run(actionName, params, opts)
-  }
-
-  #run(actionName: string, params: Record<string, unknown>, opts: { actor: string }): ActionResult {
     // Every attempt is audited — including the ones that never reach the model.
     const refuseAs = (
       target: string,
@@ -611,17 +590,16 @@ export class Runtime {
     const target = `${action.object}/${pk}`
     const refuse = (error: Violation, edits?: Edit[]): ActionResult => refuseAs(target, parsed.data, error, edits)
 
-    // Crashes are attempts too, and they are audited with a code that says
-    // where they happened: READ_FAILED for storage faults, RULE_CRASHED for
-    // model code (visibility, preconditions, effects) that threw.
-    const crashedAs = (code: string, e: unknown): never => {
+    // Crashes are attempts too — audited as EXECUTION_CRASHED, then the
+    // error surfaces to the caller.
+    const crashed = (e: unknown): never => {
       this.#audit({
         actor: opts.actor,
         action: actionName,
         target,
         params: parsed.data,
         status: 'rejected',
-        error: reject(code, e instanceof Error ? e.message : String(e)),
+        error: reject('EXECUTION_CRASHED', e instanceof Error ? e.message : String(e)),
       })
       throw e
     }
@@ -629,17 +607,11 @@ export class Runtime {
     let object: Record<string, unknown> | undefined
     try {
       object = this.#fetch(action.object, pk)
+      // Visibility gates action targets too: an object the actor cannot see
+      // is TARGET_NOT_FOUND — same as a missing one, so existence never leaks.
+      if (object !== undefined && !this.#visible(action.object, object, opts.actor)) object = undefined
     } catch (e) {
-      crashedAs('READ_FAILED', e)
-    }
-    if (object !== undefined) {
-      try {
-        // Visibility gates action targets too: an object the actor cannot see
-        // is TARGET_NOT_FOUND — same as a missing one, so existence never leaks.
-        if (!this.#visible(action.object, object, opts.actor)) object = undefined
-      } catch (e) {
-        crashedAs('RULE_CRASHED', e)
-      }
+      crashed(e)
     }
     if (!object) return refuse(reject('TARGET_NOT_FOUND', `${target} does not exist`))
     const ctx: ActionCtx = { object, params: parsed.data, actor: opts.actor }
@@ -652,68 +624,60 @@ export class Runtime {
       }
       edits = action.effects(ctx)
     } catch (e) {
-      crashedAs('RULE_CRASHED', e)
+      crashed(e)
     }
 
-    // Statically invalid edits are refused before anything leaves this
-    // process — the write-back adapter never sees an edit plan the model can
-    // already prove wrong.
-    try {
-      this.#validateEdits(edits)
-    } catch (e) {
-      return refuse(reject('INVALID_EDITS', editErrorMessage(e)))
-    }
-
-    // The authority line. `writeback` is the action's declared side of it,
-    // and the declaration is checked against what the plan actually touches:
-    // an undeclared write to source-backed state is exactly the shadow copy
-    // the fourth property forbids, whatever the action is named.
-    try {
-      const authorities = new Set(edits.map((e) => this.#editAuthority(e)))
-      if (authorities.size > 1) {
-        return refuse(
-          reject(
-            'MIXED_AUTHORITY',
-            'the edit plan changes both source-backed and ontology-owned state — ' +
-              'plans are routed whole, so split the action along the authority line',
-          ),
-        )
-      }
-      const authority = authorities.values().next().value
-      if (authority === 'source' && !action.writeback) {
-        return refuse(
-          reject(
-            'UNDECLARED_SOURCE_WRITE',
-            'the edit plan changes source-backed state but the action does not declare `writeback: true` — ' +
-              'a local change to source truth that never travels home is a shadow copy',
-          ),
-        )
-      }
-      if (authority === 'ontology' && action.writeback) {
-        return refuse(
-          reject(
-            'MISDECLARED_WRITEBACK',
-            'the action declares `writeback: true` but the edit plan changes only ontology-owned state — ' +
-              'nothing in it belongs to a source',
-          ),
-        )
-      }
-    } catch (e) {
-      if (e instanceof PlanViolation) return refuse(e.violation)
-      throw e
-    }
-
-    // Dry-run the commit before anything leaves this process: the same code
-    // that will apply the plan applies it inside a transaction that is
-    // always rolled back. Everything the commit would check — link
-    // endpoints, cardinality, merged schemas — is checked here first, so the
-    // write-back adapter never sees a plan the ontology store would refuse.
-    // (Single-writer, synchronous: nothing can change between this dry run
-    // and the commit below.)
+    // The single validation gate: dry-run the whole plan through the
+    // commit's own code before anything leaves this process. Everything the
+    // commit would check — unknown keys, schemas, link endpoints,
+    // cardinality — is checked here first, so the write-back adapter never
+    // sees a plan the ontology store would refuse. (Single-writer,
+    // synchronous: nothing can change between this dry run and the commit
+    // below.)
     try {
       this.#preflight(edits)
     } catch (e) {
       return refuse(reject('INVALID_EDITS', editErrorMessage(e)))
+    }
+
+    // The authority line, checked after validity: `writeback` is the
+    // action's declared side of it, and the declaration is checked against
+    // what the plan actually touches — an undeclared write to source-backed
+    // state is exactly the shadow copy the fourth property forbids,
+    // whatever the action is named.
+    const sides = new Set<'source' | 'ontology'>()
+    for (const edit of edits) {
+      const side = this.#editAuthority(edit)
+      if (typeof side !== 'string') return refuse(side)
+      sides.add(side)
+    }
+    if (sides.size > 1) {
+      return refuse(
+        reject(
+          'MIXED_AUTHORITY',
+          'the edit plan changes both source-backed and ontology-owned state — ' +
+            'plans are routed whole, so split the action along the authority line',
+        ),
+      )
+    }
+    const authority = sides.values().next().value
+    if (authority === 'source' && !action.writeback) {
+      return refuse(
+        reject(
+          'UNDECLARED_SOURCE_WRITE',
+          'the edit plan changes source-backed state but the action does not declare `writeback: true` — ' +
+            'a local change to source truth that never travels home is a shadow copy',
+        ),
+      )
+    }
+    if (authority === 'ontology' && action.writeback) {
+      return refuse(
+        reject(
+          'MISDECLARED_WRITEBACK',
+          'the action declares `writeback: true` but the edit plan changes only ontology-owned state — ' +
+            'nothing in it belongs to a source',
+        ),
+      )
     }
 
     // An empty plan changes nothing, so there is nothing to write back —
@@ -817,70 +781,23 @@ export class Runtime {
   }
 
   /**
-   * Model-only validation of an edit plan — everything provable without
-   * reading current state. DB-dependent checks (merged-object schemas, link
-   * endpoints, cardinality) live in #applyEdits, which the preflight
-   * dry-runs before write-back and the commit runs for real.
-   */
-  #validateEdits(edits: Edit[]): void {
-    for (const edit of edits) {
-      if (edit.op === 'link' || edit.op === 'unlink') {
-        if (!Object.hasOwn(this.ontology.links, edit.link)) throw new Error(`unknown link type "${edit.link}"`)
-        continue
-      }
-      const def = this.#objectDef(edit.object)
-      const schema = this.#schemas.get(edit.object)!
-      // Unknown keys are refused, not silently stripped: a stripped key
-      // would still travel to the write-back adapter in the raw edit and
-      // let source and store diverge without a trace. Object.hasOwn, not
-      // `in`: prototype names (toString, __proto__, …) must not masquerade
-      // as model properties.
-      const payload = edit.op === 'create' ? edit.data : edit.changes
-      const unknown = Object.keys(payload).filter((key) => !Object.hasOwn(def.properties, key))
-      if (unknown.length > 0) {
-        throw new Error(`unknown propert${unknown.length > 1 ? 'ies' : 'y'} "${unknown.join('", "')}" on ${edit.object}`)
-      }
-      if (edit.op === 'create') {
-        const data = schema.parse(edit.data)
-        if (String(data[def.primaryKey]) !== edit.pk) {
-          throw new Error(
-            `create pk mismatch for ${edit.object}: edit says "${edit.pk}", data says "${String(data[def.primaryKey])}"`,
-          )
-        }
-      } else {
-        // A modify that changes nothing is not an edit — refusing it here
-        // keeps the authority classification total: every edit that reaches
-        // it has a side.
-        if (Object.keys(edit.changes).length === 0) {
-          throw new Error(`modify on ${edit.object}/${edit.pk} changes nothing`)
-        }
-        if (Object.hasOwn(edit.changes, def.primaryKey) && edit.changes[def.primaryKey] !== edit.pk) {
-          throw new Error(`cannot modify the primary key of ${edit.object}/${edit.pk}`)
-        }
-        schema.partial().parse(edit.changes)
-      }
-    }
-  }
-
-  /**
    * Which side of the authority line an edit falls on, per the model's
-   * `owned` declarations. Total: empty modifies were already refused, so
-   * every edit has a side. Throws PlanViolation for an edit no side can
-   * legally hold.
+   * `owned` declarations — or the Violation for an edit no side can legally
+   * hold. Runs after the preflight, so every edit it sees is one the store
+   * would accept (empty modifies included: they were already refused).
    */
-  #editAuthority(edit: Edit): 'source' | 'ontology' {
+  #editAuthority(edit: Edit): 'source' | 'ontology' | Violation {
     if (edit.op === 'link' || edit.op === 'unlink') {
-      return this.ontology.links[edit.link]?.owned ? 'ontology' : 'source'
+      const linkDef = Object.hasOwn(this.ontology.links, edit.link) ? this.ontology.links[edit.link] : undefined
+      return linkDef?.owned ? 'ontology' : 'source'
     }
     const def = this.#objectDef(edit.object)
     if (def.owned === true) return 'ontology'
     if (edit.op === 'create') {
-      throw new PlanViolation(
-        reject(
-          'SOURCE_CREATE_UNSUPPORTED',
-          `cannot create ${edit.object}/${edit.pk}: the type is source-backed, and creation is supported ` +
-            'for ontology-owned types only — creating at the source is undemonstrated, so undeclared',
-        ),
+      return reject(
+        'SOURCE_CREATE_UNSUPPORTED',
+        `cannot create ${edit.object}/${edit.pk}: the type is source-backed, and creation is supported ` +
+          'for ontology-owned types only — creating at the source is undemonstrated, so undeclared',
       )
     }
     const ownedKeys = def.owned ? Object.keys(def.owned) : []
@@ -888,18 +805,17 @@ export class Runtime {
     const owned = touched.filter((key) => ownedKeys.includes(key))
     if (owned.length === 0) return 'source'
     if (owned.length === touched.length) return 'ontology'
-    throw new PlanViolation(
-      reject(
-        'MIXED_AUTHORITY',
-        `edit on ${edit.object}/${edit.pk} changes source-backed and ontology-owned properties together — split it`,
-      ),
+    return reject(
+      'MIXED_AUTHORITY',
+      `edit on ${edit.object}/${edit.pk} changes source-backed and ontology-owned properties together — split it`,
     )
   }
 
   /**
-   * The dry run behind the write-back guarantee: the exact code that will
-   * commit the plan applies it inside a transaction that always rolls back.
-   * No second validator to drift out of sync with the real one.
+   * The single validation gate, and the dry run behind the write-back
+   * guarantee: the exact code that will commit the plan applies it inside a
+   * transaction that always rolls back. No second validator to drift out of
+   * sync with the real one.
    */
   #preflight(edits: Edit[]): void {
     try {
@@ -942,7 +858,9 @@ export class Runtime {
   #applyEdits(edits: Edit[]): void {
     for (const edit of edits) {
       if (edit.op === 'link' || edit.op === 'unlink') {
-        const linkDef = this.ontology.links[edit.link]
+        // Object.hasOwn, not a bare index: prototype names (toString,
+        // __proto__, …) must not masquerade as link types.
+        const linkDef = Object.hasOwn(this.ontology.links, edit.link) ? this.ontology.links[edit.link] : undefined
         if (!linkDef) throw new Error(`unknown link type "${edit.link}"`)
         if (edit.op === 'link') {
           // A link is a statement about two objects — both endpoints must exist.
@@ -972,6 +890,15 @@ export class Runtime {
       }
       const def = this.#objectDef(edit.object)
       const schema = this.#schemas.get(edit.object)!
+      // Unknown keys are refused, not silently stripped: zod would strip
+      // them, but the raw edit still travels to the write-back adapter, and
+      // a stripped key would let source and store diverge without a trace.
+      // Object.hasOwn, not `in`: prototype names are unknown keys too.
+      const payload = edit.op === 'create' ? edit.data : edit.changes
+      const unknown = Object.keys(payload).filter((key) => !Object.hasOwn(def.properties, key))
+      if (unknown.length > 0) {
+        throw new Error(`unknown propert${unknown.length > 1 ? 'ies' : 'y'} "${unknown.join('", "')}" on ${edit.object}`)
+      }
       if (edit.op === 'create') {
         const data = schema.parse(edit.data)
         if (String(data[def.primaryKey]) !== edit.pk) {
@@ -984,7 +911,11 @@ export class Runtime {
           .run(edit.object, edit.pk, this.#storable(edit.object, data))
         continue
       }
-      // modify
+      // modify. A modify that changes nothing is not an edit — refusing it
+      // keeps the authority classification total: every edit has a side.
+      if (Object.keys(edit.changes).length === 0) {
+        throw new Error(`modify on ${edit.object}/${edit.pk} changes nothing`)
+      }
       if (Object.hasOwn(edit.changes, def.primaryKey) && edit.changes[def.primaryKey] !== edit.pk) {
         throw new Error(`cannot modify the primary key of ${edit.object}/${edit.pk}`)
       }

@@ -205,7 +205,7 @@ const ontology = defineOntology({
       writeback: true,
     }),
     landmine: defineAction({
-      // A crashing rule — must be audited as RULE_CRASHED, not lost.
+      // A crashing rule — must be audited as EXECUTION_CRASHED, not lost.
       object: 'Order',
       targetParam: 'orderId',
       params: { orderId: z.string() },
@@ -240,6 +240,33 @@ const ontology = defineOntology({
       params: { orderId: z.string() },
       preconditions: [],
       effects: ({ object }) => [modify('Order', object.id as string, { id: 'HIJACKED' })],
+    }),
+    sneakyCorrupt: defineAction({
+      // Two flaws at once — an invalid edit AND an undeclared source write.
+      // Pins the declared refusal order: validity precedes authority.
+      object: 'Order',
+      targetParam: 'orderId',
+      params: { orderId: z.string() },
+      preconditions: [],
+      effects: ({ object }) => [modify('Order', object.id as string, { status: 'bogus' })],
+    }),
+    sloppierReassign: defineAction({
+      // A cardinality violation AND an undeclared source write — same order.
+      object: 'Order',
+      targetParam: 'orderId',
+      params: { orderId: z.string(), toCustomerId: z.string() },
+      preconditions: [],
+      effects: ({ object, params }) => [
+        link('customerOrders', params.toCustomerId as string, object.id as string),
+      ],
+    }),
+    protoUnlink: defineAction({
+      // An unlink whose "link type" is a prototype name — unknown, refused.
+      object: 'Order',
+      targetParam: 'orderId',
+      params: { orderId: z.string() },
+      preconditions: [],
+      effects: () => [unlink('toString', 'a', 'b')],
     }),
     openTask: defineAction({
       // Creates an ontology-owned object and wires it to its order in one
@@ -282,7 +309,21 @@ function setup(adapter?: WritebackAdapter) {
 
 const asTest = { actor: 'test' }
 
-const noopAdapter = (): WritebackAdapter => ({ name: 'noop', apply: () => {} })
+const noopAdapter = (): WritebackAdapter => ({ apply: () => {} })
+
+// ─── The declared answers, enumerable at runtime ───
+
+test('the implementation declares its four answers as one enumerable value', () => {
+  const rt = setup()
+  assert.deepEqual(rt.declarations, {
+    authority: 'model-declared-runtime-checked',
+    failureSemantics: 'write-back-first',
+    reindexing: 'replace-base-reapply-owned-overlay',
+    visibilityDefault: 'fail-open',
+  })
+})
+
+// ─── Properties 2 & 3 · the gate: named actions, machine-readable refusals, audited attempts ───
 
 test('a business rule refuses the write with a machine-readable error', () => {
   const rt = setup()
@@ -358,10 +399,11 @@ test('params the audit log cannot hold are refused — and still audited', () =>
   assert.equal(rt.get<{ status: string }>('Order', 'O2', asTest)!.status, 'pending')
 })
 
+// ─── Property 4 · write-back and its declared failure semantics ───
+
 test('write-back-first ordering: adapter failure blocks the ontology edit', () => {
   const calls: string[] = []
   const failing: WritebackAdapter = {
-    name: 'failing-erp',
     apply: () => {
       calls.push('adapter')
       throw new Error('ERP is down')
@@ -394,7 +436,6 @@ test('an action that requires write-back refuses without an adapter', () => {
 test('the adapter receives its routing material: the target as the runtime loaded it', () => {
   let seen: { type: string; pk: string; object: Record<string, unknown> } | undefined
   const probe: WritebackAdapter = {
-    name: 'probe',
     apply: (_edits, meta) => {
       seen = meta.target
     },
@@ -408,9 +449,9 @@ test('the adapter receives its routing material: the target as the runtime loade
   })
 })
 
-test('statically invalid edits are refused before the adapter ever runs', () => {
+test('invalid edits are refused before the adapter ever runs', () => {
   const calls: string[] = []
-  const spy: WritebackAdapter = { name: 'spy', apply: () => calls.push('adapter') && undefined }
+  const spy: WritebackAdapter = { apply: () => calls.push('adapter') && undefined }
   const rt = setup(spy)
   // All these actions declare writeback: true — the spy proves the plan
   // was refused before it could leave the process.
@@ -442,9 +483,9 @@ test('statically invalid edits are refused before the adapter ever runs', () => 
   assert.equal(rt.auditLog({ status: 'rejected' }).length, 4)
 })
 
-test('DB-dependent violations are ALSO refused before the adapter runs (preflight)', () => {
+test('the preflight is the single gate: store-level violations are refused before the adapter runs', () => {
   const calls: string[] = []
-  const spy: WritebackAdapter = { name: 'spy', apply: () => calls.push('adapter') && undefined }
+  const spy: WritebackAdapter = { apply: () => calls.push('adapter') && undefined }
   const rt = setup(spy)
   // A link to a customer that does not exist — provable only against the
   // store, and still refused before anything leaves the process.
@@ -467,7 +508,7 @@ test('DB-dependent violations are ALSO refused before the adapter runs (prefligh
 
 test('one-to-many cardinality is enforced at the write gate, before write-back', () => {
   const calls: string[] = []
-  const spy: WritebackAdapter = { name: 'spy', apply: () => calls.push('adapter') && undefined }
+  const spy: WritebackAdapter = { apply: () => calls.push('adapter') && undefined }
   const rt = setup(spy)
   // Linking O2 to C2 without unlinking C1 first would give the order two customers.
   const result = rt.execute('sloppyReassign', { orderId: 'O2', toCustomerId: 'C2' }, { actor: 'test' })
@@ -487,7 +528,6 @@ test('a commit failure after write-back is the declared divergence — audited w
   // store — the mechanical stand-in for the declared reverse failure
   // (adapter succeeded, local commit failed).
   const saboteur: WritebackAdapter = {
-    name: 'saboteur',
     apply: () => {
       db.prepare("UPDATE objects SET data = 'not json' WHERE pk = 'O2'").run()
     },
@@ -505,7 +545,7 @@ test('a commit failure after write-back is the declared divergence — audited w
 
 test('an empty plan calls no adapter — there is nothing to write back', () => {
   const calls: string[] = []
-  const spy: WritebackAdapter = { name: 'spy', apply: () => calls.push('adapter') && undefined }
+  const spy: WritebackAdapter = { apply: () => calls.push('adapter') && undefined }
   const rt = setup(spy)
   const result = rt.execute('idleWriteback', { orderId: 'O2' }, { actor: 'test' })
   assert.equal(result.ok, true)
@@ -515,7 +555,6 @@ test('an empty plan calls no adapter — there is nothing to write back', () => 
 
 test('the committed plan is the validated plan — an adapter cannot mutate it', () => {
   const meddling: WritebackAdapter = {
-    name: 'meddling-erp',
     apply: (edits) => {
       // A misbehaving adapter rewrites the plan it was handed.
       const first = edits[0]
@@ -534,7 +573,7 @@ test('the committed plan is the validated plan — an adapter cannot mutate it',
   ])
 })
 
-// ── The authority line ──
+// ─── Property 4 · the authority line: declared homes, checked ───
 
 test('an undeclared write to source-backed state is refused as a shadow copy', () => {
   const rt = setup()
@@ -569,7 +608,22 @@ test('creating a source-backed object is refused by declaration', () => {
   assert.equal(rt.get('Order', 'N1', asTest), undefined)
 })
 
-// ── Re-indexing vs the edit layer ──
+test('validity precedes the authority line — a broken plan is INVALID_EDITS, whatever else it is', () => {
+  const rt = setup()
+  // An invalid value AND an undeclared source write: the plan fails as a plan first.
+  const bogus = rt.execute('sneakyCorrupt', { orderId: 'O2' }, { actor: 'test' })
+  assert.equal(bogus.ok, false)
+  if (!bogus.ok) assert.equal(bogus.error.code, 'INVALID_EDITS')
+  // A cardinality violation AND an undeclared source write: same order.
+  const sloppy = rt.execute('sloppierReassign', { orderId: 'O2', toCustomerId: 'C2' }, { actor: 'test' })
+  assert.equal(sloppy.ok, false)
+  if (!sloppy.ok) {
+    assert.equal(sloppy.error.code, 'INVALID_EDITS')
+    assert.match(sloppy.error.message, /one-to-many/)
+  }
+})
+
+// ─── Declared · re-indexing vs edits: the base refreshes, owned state survives ───
 
 test('ontology-owned state survives a re-index; source-backed state refreshes', () => {
   const rt = setup()
@@ -670,7 +724,7 @@ test('a model that stops owning a property refuses to load over its edits', () =
   assert.throws(() => v2.load({ objects: { Widget: [{ id: 'W1', note: 'fresh' }] } }), /no longer declares/)
 })
 
-// ── Creation through the gate ──
+// ─── Property 1 · objects and links: creation, rewiring, traversal ───
 
 test('an action can create an ontology-owned object and wire it, atomically', () => {
   const rt = setup()
@@ -684,6 +738,8 @@ test('an action can create an ontology-owned object and wire it, atomically', ()
   assert.equal(dup.ok, false)
   if (!dup.ok) assert.equal(dup.error.code, 'INVALID_EDITS')
 })
+
+// ─── Mechanics · the storable boundary and transaction ownership ───
 
 test('every stored row must be plain JSON — whichever door it came through', () => {
   // Through an action: an ontology-owned type whose schema emits a Date.
@@ -756,19 +812,6 @@ test('a hole and a named property cannot cancel out in an array', () => {
   )
 })
 
-test('empty names are not identifiers', () => {
-  assert.throws(
-    () =>
-      defineOntology({
-        name: 'bad',
-        objects: { '': defineObject({ primaryKey: 'id', properties: { id: z.string() } }) },
-        links: {},
-        actions: {},
-      }),
-    /not a valid object type name/,
-  )
-})
-
 test('an empty modify is not an edit', () => {
   const rt = setup()
   const result = rt.execute('hollowModify', { orderId: 'O2' }, { actor: 'test' })
@@ -824,8 +867,6 @@ test('prune compares structurally — key order cannot hide "back at default"', 
   assert.equal(rt.get('Widget', 'W1', { actor: 'test' }), undefined)
 })
 
-// ── Graph edits ──
-
 test('actions can rewire the graph itself — links are edits too', () => {
   const rt = setup()
   const result = rt.execute(
@@ -869,7 +910,7 @@ test('the primary key cannot be modified', () => {
   assert.notEqual(rt.get('Order', 'O2', asTest), undefined)
 })
 
-// ── Crashes, storage faults, prototype names ──
+// ─── Mechanics · crashes are audited attempts too ───
 
 test('prototype names are not actions, objects, or links', () => {
   const rt = setup()
@@ -878,26 +919,34 @@ test('prototype names are not actions, objects, or links', () => {
   if (!result.ok) assert.equal(result.error.code, 'UNKNOWN_ACTION')
   assert.throws(() => rt.get('toString', 'x', asTest), /unknown object type/)
   assert.throws(() => rt.traverse('toString', 'x', asTest), /unknown link type/)
+  // …and not link types inside an edit plan either — refused before the
+  // adapter could ever see the plan.
+  const viaEffects = rt.execute('protoUnlink', { orderId: 'O2' }, { actor: 'test' })
+  assert.equal(viaEffects.ok, false)
+  if (!viaEffects.ok) {
+    assert.equal(viaEffects.error.code, 'INVALID_EDITS')
+    assert.match(viaEffects.error.message, /unknown link type/)
+  }
 })
 
-test('a storage fault is audited as READ_FAILED', () => {
+test('a storage fault is an audited attempt too — EXECUTION_CRASHED', () => {
   const db = new Database(':memory:')
   const rt = createRuntime(ontology, db, { writeback: noopAdapter() })
   rt.load(SNAPSHOT)
   db.prepare("UPDATE objects SET data = 'not json' WHERE pk = 'O2'").run()
   assert.throws(() => rt.execute('cancelOrder', { orderId: 'O2', reason: 'x' }, { actor: 'test' }))
-  assert.equal(rt.auditLog({ status: 'rejected' })[0]?.error?.code, 'READ_FAILED')
+  assert.equal(rt.auditLog({ status: 'rejected' })[0]?.error?.code, 'EXECUTION_CRASHED')
 })
 
-test('crashing rules are audited too — RULE_CRASHED, then the error surfaces', () => {
+test('crashing rules are audited too — EXECUTION_CRASHED, then the error surfaces', () => {
   const rt = setup()
   assert.throws(() => rt.execute('landmine', { orderId: 'O2' }, { actor: 'test' }), /precondition crashed/)
   assert.throws(() => rt.execute('explodingEffects', { orderId: 'O2' }, { actor: 'test' }), /effects crashed/)
   const rejected = rt.auditLog({ status: 'rejected' })
-  assert.deepEqual(rejected.map((e) => e.error?.code), ['RULE_CRASHED', 'RULE_CRASHED'])
+  assert.deepEqual(rejected.map((e) => e.error?.code), ['EXECUTION_CRASHED', 'EXECUTION_CRASHED'])
 })
 
-// ── Indexing ──
+// ─── Property 1 · indexing: the snapshot must satisfy the model ───
 
 test('re-loading resets source-backed links instead of merging', () => {
   const rt = setup()
@@ -954,7 +1003,7 @@ test('indexing refuses unknown keys instead of silently stripping them', () => {
   )
 })
 
-// ── Aggregation ──
+// ─── Derived state: computed at query time, never written ───
 
 test('aggregation happens at query time', () => {
   const rt = setup()
@@ -977,7 +1026,7 @@ test('aggregation is immune to prototype-named groups', () => {
   assert.equal(({} as Record<string, unknown>).count, undefined) // Object.prototype untouched
 })
 
-// ── Visibility: the read-side twin of preconditions ──
+// ─── Declared · visibility: fail-open, attached to the model ───
 
 const visOntology = defineOntology({
   name: 'vis',
@@ -1043,10 +1092,10 @@ test('visibility lives in the model: the same search returns different worlds', 
   assert.deepEqual(rt.search<{ id: string }>('Doc', { actor: 'user:auditor' }).map((d) => d.id), ['D1', 'D2'])
 })
 
-test('a crashing visibility predicate is audited as RULE_CRASHED', () => {
+test('a crashing visibility predicate is audited as EXECUTION_CRASHED', () => {
   const rt = visSetup()
   assert.throws(() => rt.execute('springTrap', { trapId: 'T1' }, { actor: 'user:alice' }), /visibility crashed/)
-  assert.equal(rt.auditLog({ status: 'rejected' })[0]?.error?.code, 'RULE_CRASHED')
+  assert.equal(rt.auditLog({ status: 'rejected' })[0]?.error?.code, 'EXECUTION_CRASHED')
 })
 
 test('a hidden origin leaks nothing through traversal', () => {

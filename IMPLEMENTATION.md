@@ -17,6 +17,10 @@ The model declares which state the ontology owns (`owned` on object types and li
 
 An empty plan touches neither side of the line: it calls no adapter and commits only its audit entry. An action that declares write-back but has no adapter configured is refused (**`NO_WRITEBACK_ADAPTER`**).
 
+The refusal order is declared, too: **validity precedes authority.** The whole plan is dry-run through the commit's own code first, so a plan the store would refuse is **`INVALID_EDITS`** even if it also crosses the authority line — an edit that cannot happen has no home worth arguing about.
+
+The four declared answers themselves travel as one enumerable value, `Runtime.declarations`, pinned by a test.
+
 ## Failure semantics in detail
 
 The README declares write-back-first ordering: the adapter runs before the local commit, so if the system of record refuses, nothing changes here — and the reverse failure (adapter succeeded, local commit failed) remains possible. Three mechanisms sharpen that boundary:
@@ -27,7 +31,7 @@ The README declares write-back-first ordering: the adapter runs before the local
 
 **The honest limit of "every attempt is audited".** It means every attempt this runtime observed to completion. A process death between the source update and the local commit loses both the edit and its audit entry; closing that window takes a persisted pending-invocation record, which this implementation does not have.
 
-Crashes inside the write path are audited too, with a code that says where they happened: **`READ_FAILED`** for storage faults, **`RULE_CRASHED`** for model code — a visibility predicate, a precondition, an effects function — that threw. The error then surfaces to the caller.
+Crashes inside the write path are audited too: **`EXECUTION_CRASHED`** — a storage fault, or model code (a visibility predicate, a precondition, an effects function) that threw. The error then surfaces to the caller.
 
 The audit write itself must never be the thing that fails. Params that survive no JSON round trip are refused as **`INVALID_PARAMS`** before the model runs, and whatever the log cannot encode is recorded as a `$unserializable` placeholder — a lossy audit entry beats a lost one.
 
