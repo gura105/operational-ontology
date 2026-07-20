@@ -1,0 +1,9 @@
+{
+  "mcpServers": {
+    "orders": {
+      "command": "pnpm",
+      "args": ["mcp"],
+      "env": { "OO_AGENT": "claude-code" }
+    }
+  }
+}
