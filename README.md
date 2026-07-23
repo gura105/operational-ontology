@@ -24,7 +24,7 @@ pnpm demo    # physical data → integrate → index → read → write → refu
 pnpm test    # the same behavior, as executable tests
 ```
 
-The demo uses the scenario from the [article this repository accompanies](https://x.com/gura105/status/2077153028982133080) (in Japanese). A company acquires a competitor and inherits **two legacy order systems with different schemas and status encodings**. A few dozen lines of SQL and a small TypeScript mapping integrate them, and the ontology models `Customer`, `Order`, and `Product` on top — plus `Note`, a type that exists in no source system. The demo then shows:
+The demo uses the scenario from the [article this repository accompanies](https://note.com/gura105/n/nfe927c169c6a?hl=en). A company acquires a competitor and inherits **two legacy order systems with different schemas and status encodings**. A few dozen lines of SQL and a small TypeScript mapping integrate them, and the ontology models `Customer`, `Order`, and `Product` on top — plus `Note`, a type that exists in no source system. The demo then shows:
 
 - a link traversal answering "which orders contain this product?" across both systems
 - `assignOrder` writing state that exists in no legacy system — edits can live in a layer above the sources
@@ -92,7 +92,7 @@ All four answers are also collected in one enumerable value, `Runtime.declaratio
 pnpm mcp     # serve the same ontology to agents over stdio
 ```
 
-The MCP tool surface is generated from the model: `search_order`, `traverse_customer_orders`, `cancel_order`, `read_audit_log`, … — one tool per query shape and one per action. Two consequences:
+The MCP tool surface is generated from the model: `search_order`, `traverse_customer_orders`, `cancel_order`, `read_audit_log`, … — one tool per query shape and one per action. The tool surface is derived from the schema side; the calls act on the instance side. Two consequences:
 
 - **There is no raw SQL tool.** Agents get exactly the operations the model defines, and nothing else.
 - **The same preconditions that gate humans gate agents.** An agent that tries to cancel a shipped order receives `{ "error": { "code": "SHIPPED_ORDER_CANNOT_BE_CANCELLED", … } }` — a machine-readable refusal it can read, recover from, and explain to its user.
@@ -112,7 +112,7 @@ https://github.com/user-attachments/assets/28327062-e09f-4103-943e-434a0e55b327
 
 ## The pattern
 
-Five concepts — objects, links, actions, edits, and the audit log — are defined as data and interpreted by a runtime (`src/core.ts`):
+The model defines three kinds of types: object types, link types, and action types. At runtime their instances — objects, links, and applied actions — live in the store. The remaining two concepts connect the pairs: edits are the changes to objects and links that an action instance describes, and the audit log is where the action instances themselves are recorded. All five concepts are defined as data and interpreted by a runtime (`src/core.ts`):
 
 ```ts
 const ontology = defineOntology({
@@ -156,7 +156,7 @@ const ontology = defineOntology({
 
 Because the definition is a plain value, it can be enumerated, diffed, and versioned; the MCP tool surface above is derived from it mechanically.
 
-`Runtime.execute()` is the only operational write path the API exposes. It always runs these steps, in this order:
+`Runtime.execute()` is the only operational write path the API exposes. Every call, applied or refused, creates one action instance and records it in the audit log. The steps always run in this order:
 
 1. validate the parameters
 2. evaluate the preconditions
@@ -170,11 +170,11 @@ This closure is a contract on the API, not a privilege boundary: the runtime liv
 
 Reads carry identity too. Every `search` / `get` / `traverse` / `aggregate` runs as an `actor`, and an object type may attach a `visibility` predicate — row-level security in its minimal form, stored in the model like everything else. A hidden object is indistinguishable from a nonexistent one, both for reads and as an action target.
 
-Edits are data as well: `modify`, `create`, and `link` / `unlink`. Actions can therefore change link instances, not just properties. Link *types* are part of the model and do not change here; which links exist between which objects is state, and it changes only through actions — cardinality included: the runtime refuses a `link` that would give an order two customers. "Reassign this order to another customer" is an unlink plus a link, applied atomically under the same preconditions as everything else. Creation goes through the same gate: the demo's `addOrderNote` creates an ontology-owned note and links it to its order in one atomic plan. Deletes are out of scope in this version (see [Status](#status)); changing the model itself — new object types, new link types — is schema evolution (see the FAQ).
+Edits are data as well: `modify`, `create`, and `link` / `unlink`. Actions can therefore change link instances, not just properties. Link types are schema and do not change here; the links themselves are instances, and they change only through actions — cardinality included: the runtime refuses a `link` that would give an order two customers. "Reassign this order to another customer" is an unlink plus a link, applied atomically under the same preconditions as everything else. Creation goes through the same gate: the demo's `addOrderNote` creates an ontology-owned note and links it to its order in one atomic plan. Deletes are out of scope in this version (see [Status](#status)); changing the model itself — new object types, new link types — is schema evolution (see the FAQ).
 
 The model is data rather than classes for a practical reason. `class Order { cancel() {} }` cannot be enumerated into agent tools, shared across applications, or inspected at runtime without an added reflection layer, and its signature says nothing about preconditions. A class-based domain layer is private to one application; the point of this pattern is a domain layer that is shared.
 
-The five concepts also split along a general line — schema and instance (TBox and ABox, in the vocabulary of formal ontology). The distinction is no part of what makes the pattern, but as an anatomy of it, it works well. Foundry uses the same phrasing for all three pairs — object type and object, link type and link, action type and action: the former is a "schema definition", the latter its individuals. Here the split falls like this. The schema side: the object, link, and action definitions, plus the authority declarations (`owned` and `writeback`) and visibility — a plain value that lives in git, readable at runtime as `Runtime.declarations` and as the MCP tool surface, and not changeable there. The instance side: object state, link instances, and the entries of the audit log — living in the store, changed only through actions. An audit entry is nothing other than the instance of an applied (or refused) action (querying past actions is in the FAQ). Restated in this vocabulary, the four properties all govern the instance side. An authority declaration is a schema-side statement of who holds the truth of a piece of instance state, and that answer decides the state's write path: write-back concerns only the state whose declared owner is upstream. That the edit vocabulary — `modify` / `create` / `link` / `unlink` — is all instance operations states the same split structurally: no edit changes the schema. Property 2's "schema evolution changes what can be said, not what is true" is this distinction in other words.
+The type/instance split is a general one — formal ontology calls the sides TBox and ABox — and it is no part of what makes the pattern; as an anatomy of it, though, it works well. Foundry uses the same phrasing for all three pairs — object type and object, link type and link, action type and action: the former is a "schema definition", the latter its individuals. The schema side — the type definitions plus the authority declarations (`owned` / `writeback`) and visibility — is a plain value that lives in git, readable at runtime as `Runtime.declarations` and as the MCP tool surface, and not changeable there. The instance side lives in the store and changes only through actions. Restated in this vocabulary, the four properties all govern the instance side. An authority declaration is a schema-side statement of who holds the truth of a piece of instance state, and that answer decides the state's write path: write-back concerns only the state whose declared owner is upstream. That the edit vocabulary — `modify` / `create` / `link` / `unlink` — is all instance operations states the same split structurally: no edit changes the schema. Property 2's "schema evolution changes what can be said, not what is true" is this distinction in other words (querying applied actions as instances is in the FAQ).
 
 ## Where this sits
 
@@ -233,7 +233,7 @@ Scope is frozen for v0 so the reference implementation stays small enough to rea
 
 **Isn't this just CRUD with validation?** The parts are familiar; the configuration is not. CRUD validation lives inside one application, on tables that application owns. Here the model sits on data other systems own, is shared by every consumer (UIs, scripts, agents), closes every write path except actions, audits every attempt, and writes accepted changes back to the systems of record. The closest existing description is a CQRS command layer extracted from the application and placed over someone else's data.
 
-**Isn't a knowledge graph writable too?** Yes. SPARQL UPDATE can set `status = 'cancelled'`, and a `WHERE` clause or a SHACL shape can make it conditional. What a triple store does not provide as one first-class unit is the rest of the contract: a named business operation, a machine-readable refusal, an audit trail of attempts, and write-back to the system of record. The difference is not capability — all of this can be built on a triple store — but what comes named, governed, and first-class out of the model.
+**Isn't a knowledge graph writable too?** Yes. SPARQL UPDATE can set `status = 'cancelled'`, and a `WHERE` clause or a SHACL shape can make it conditional. Both sides are there too — a schema and instances. What is missing is the third pair: action types with their instances. What a triple store does not provide as one first-class unit is the rest of the contract: a named business operation, a machine-readable refusal, an audit trail of attempts, and write-back to the system of record. The difference is not capability — all of this can be built on a triple store — but what comes named, governed, and first-class out of the model.
 
 **Why not OWL/RDF?** Those model what things *are* (semantic). Half of this pattern is what you can *do* (kinetic): actions, preconditions, audit, write-back. A reasoner cannot cancel an order.
 
