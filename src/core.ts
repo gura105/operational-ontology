@@ -16,6 +16,10 @@
  * The ontology definition is a plain value, not a class hierarchy. The
  * runtime interprets it — which is what lets `mcp.ts` enumerate it and expose
  * the same model, guarded by the same rules, to AI agents.
+ *
+ * Vocabulary: the definitions below are the schema side of the model; the
+ * store holds the instance side — object state, link instances, and the
+ * audit log, where one entry is one attempted action.
  */
 import { isDeepStrictEqual } from 'node:util'
 import { z } from 'zod'
@@ -179,6 +183,10 @@ export interface ActionCtx<O = Record<string, unknown>, P = Record<string, unkno
   actor: string
 }
 
+/**
+ * The schema side of an action — its type. Each `execute()` call is one
+ * instance of it, applied or refused, recorded as an audit entry.
+ */
 export interface ActionDef<S extends Properties = Properties> {
   /** Object type this action operates on. */
   object: string
@@ -279,6 +287,11 @@ const editErrorMessage = (e: unknown): string =>
 
 export type ActionResult = { ok: true; edits: Edit[] } | { ok: false; error: Violation }
 
+/**
+ * One attempted action, applied or rejected — the instance to an ActionDef's
+ * type. Its identity is the occurrence, not the arguments: the same params
+ * submitted twice are two entries. That is why the log only appends.
+ */
 export interface AuditEntry {
   seq: number
   ts: string
