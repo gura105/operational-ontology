@@ -291,18 +291,23 @@ export type ObjectOf<T extends OntologyDef, K> =
  * absent and the traversal runs forward. Absent: the to side (forward).
  * A required `'reverse'`: the from side. `'forward'`, required or
  * optional: the to side. Anything else — an optional `'reverse'`, a union —
- * could go either way, and the type says so. (Presence is tested with
- * `keyof`: `{ direction?: undefined }` alone is a weak type, which an
- * options object without `direction` would fail to match.)
+ * could go either way, and the type says so. Two mechanics: `O` is
+ * distributed first, so a union of option shapes is decided member by
+ * member (`keyof` of a union keeps only the common keys, which would hide
+ * `direction`); and presence is tested with `keyof`, because
+ * `{ direction?: undefined }` alone is a weak type, which an options object
+ * without `direction` would fail to match.
  */
 export type LinkEnd<T extends OntologyDef, L extends LinkName<T>, O extends { direction?: Direction }> =
-  'direction' extends keyof O
-    ? O extends { direction: 'reverse' }
-      ? T['links'][L]['from']
-      : Exclude<O['direction'], undefined> extends 'forward'
-        ? T['links'][L]['to']
-        : T['links'][L]['from'] | T['links'][L]['to']
-    : T['links'][L]['to']
+  O extends unknown
+    ? 'direction' extends keyof O
+      ? O extends { direction: 'reverse' }
+        ? T['links'][L]['from']
+        : Exclude<O['direction'], undefined> extends 'forward'
+          ? T['links'][L]['to']
+          : T['links'][L]['from'] | T['links'][L]['to']
+      : T['links'][L]['to']
+    : never
 
 /** What a caller passes to action `A` — its parameter schema's input side. */
 export type ParamsOf<T extends OntologyDef, A extends ActionName<T>> =

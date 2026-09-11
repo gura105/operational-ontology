@@ -96,11 +96,21 @@ export function compileOnly(rt: ReturnType<typeof createRuntime<typeof model>>):
   assertType<Same<typeof stillForward, Order[]>>()
   const explicitForward = rt.traverse('customerOrders', 'C1', { ...actor, direction: 'forward' })
   assertType<Same<typeof explicitForward, Order[]>>()
-  const decideLater = (direction: Direction, maybe?: Direction) => {
+  const decideLater = (
+    direction: Direction,
+    maybe: Direction | undefined,
+    // A union of option shapes: `keyof` alone would see only the common key.
+    oneOrTheOther: { actor: string } | { actor: string; direction: 'reverse' },
+    flag: boolean,
+  ) => {
     const chosen = rt.traverse('customerOrders', 'C1', { ...actor, direction })
     assertType<Same<typeof chosen, (Customer | Order)[]>>()
     const maybeChosen = rt.traverse('customerOrders', 'C1', { ...actor, direction: maybe })
     assertType<Same<typeof maybeChosen, (Customer | Order)[]>>()
+    const eitherShape = rt.traverse('customerOrders', 'C1', oneOrTheOther)
+    assertType<Same<typeof eitherShape, (Customer | Order)[]>>()
+    const builtOnTheSpot = rt.traverse('customerOrders', 'C1', flag ? { ...actor, direction: 'reverse' as const } : actor)
+    assertType<Same<typeof builtOnTheSpot, (Customer | Order)[]>>()
   }
   void decideLater
 
@@ -166,6 +176,12 @@ test('the typed calls read and write the same store as before', () => {
   // the type above admits them (the hole a review of this change found).
   const maybeReverse: { actor: string; direction?: 'reverse' } = actor
   assert.deepEqual(rt.traverse('customerOrders', 'C1', maybeReverse).map((o) => o.id), ['O1', 'O2'])
+  // A union of option shapes is decided per member: the reverse member comes back as customers,
+  // and the type admits both — a second review found this one.
+  const read = (pk: string, opts: { actor: string } | { actor: string; direction: 'reverse' }) =>
+    rt.traverse('customerOrders', pk, opts).map((o) => o.id)
+  assert.deepEqual(read('C1', actor), ['O1', 'O2'])
+  assert.deepEqual(read('O1', { ...actor, direction: 'reverse' }), ['C1'])
   assert.equal(rt.execute('cancelOrder', { orderId: 'O2', reason: 'late' }, actor).ok, false)
   assert.equal(rt.execute('cancelOrder', { orderId: 'O1', reason: 'late' }, actor).ok, true)
   assert.equal(rt.get('Order', 'O1', actor)?.status, 'cancelled')
