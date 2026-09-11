@@ -116,42 +116,43 @@ https://github.com/user-attachments/assets/2b811ee7-bff2-4694-b3bf-bf0f6ccc85d5
 モデルが定義する型は、オブジェクト型、リンク型、アクション型の 3 種類です。実行時には、それぞれのインスタンス — オブジェクト、リンク、適用されたアクション — がストアに格納されます。他にも型とインスタンスの対をつなぐ概念としてedits（編集）があります。これはアクションのインスタンスが記述する「オブジェクトとリンクへの変更」です。監査ログは、アクションのインスタンスそのものが記録される場所です。これら 5 つの概念はすべてデータとして定義され、ランタイム（`src/core.ts`）が解釈します。
 
 ```ts
+const Customer = defineObject('Customer', {
+  primaryKey: 'id',
+  properties: { id: z.string(), name: z.string(), region: z.string() },
+})
+
+const Order = defineObject('Order', {
+  primaryKey: 'id',
+  properties: {
+    id: z.string(),
+    status: z.enum(['pending', 'shipped', 'cancelled']),
+    total: z.number().int(), // minor units — お金は float ではない
+    assignee: z.string().nullable(),
+  },
+  owned: { assignee: null },                       // オントロジー自身の状態、と宣言する
+  source: 'north.tbl_order ∪ south.SALES_ORDER',   // 物理データが先にある
+})
+
+const customerOrders = defineLink('customerOrders', { from: Customer, to: Order, kind: 'one-to-many' })
+
+const cancelOrder = defineAction('cancelOrder', {
+  object: Order,                                   // 定義そのものを渡す。ルールの `object` はこれで型付けされる
+  targetParam: 'orderId',
+  params: { orderId: z.string(), reason: z.string().min(1) },
+  preconditions: [
+    ({ object }) => object.status === 'shipped'
+      ? reject('SHIPPED_ORDER_CANNOT_BE_CANCELLED', `order ${object.id} has already shipped`)
+      : undefined,
+  ],
+  effects: ({ object }) => [modify(Order, object.id, { status: 'cancelled' })],
+  writeback: true,
+})
+
 const ontology = defineOntology({
   name: 'orders',
-  objects: {
-    Customer: defineObject({
-      primaryKey: 'id',
-      properties: { id: z.string(), name: z.string(), region: z.string() },
-    }),
-    Order: defineObject({
-      primaryKey: 'id',
-      properties: {
-        id: z.string(),
-        status: z.enum(['pending', 'shipped', 'cancelled']),
-        total: z.number().int(), // minor units — お金は float ではない
-        assignee: z.string().nullable(),
-      },
-      owned: { assignee: null },                       // オントロジー自身の状態、と宣言する
-      source: 'north.tbl_order ∪ south.SALES_ORDER',   // 物理データが先にある
-    }),
-  },
-  links: {
-    customerOrders: defineLink({ from: 'Customer', to: 'Order', kind: 'one-to-many' }),
-  },
-  actions: {
-    cancelOrder: defineAction({
-      object: 'Order',
-      targetParam: 'orderId',
-      params: { orderId: z.string(), reason: z.string().min(1) },
-      preconditions: [
-        ({ object }) => object.status === 'shipped'
-          ? reject('SHIPPED_ORDER_CANNOT_BE_CANCELLED', `order ${object.id} has already shipped`)
-          : undefined,
-      ],
-      effects: ({ object }) => [modify('Order', object.id, { status: 'cancelled' })],
-      writeback: true,
-    }),
-  },
+  objects: [Customer, Order],
+  links: [customerOrders],
+  actions: [cancelOrder],
 })
 ```
 
@@ -241,7 +242,7 @@ const ontology = defineOntology({
 
 **なぜ OWL/RDF/プロパティグラフ ではないのか？** それらはモノが「何であるか」（セマンティック）のモデルです。このパターンの半分は「何ができるか」（キネティック）にあります。アクション、事前条件、監査、書き戻し。推論器に注文はキャンセルできません。
 
-**なぜ YAML ではなく TypeScript で定義するのか？** 業務ルールはコードだからです。YAML に埋め込まれたルール式言語は、場当たり的なルールエンジンに育ちがちです。TypeScript のオブジェクトリテラルなら、モデルの列挙可能性を保ったまま、ルールを普通の型付きコードとして書けます（ランタイムの呼び出し側 — オブジェクト型名、リンク型名、アクション名、インスタンスの形、アクションの params — はモデルから型付けされますが、アクション内部のルールコンテキストはまだです。[ステータス](#ステータス)参照）。構造はデータ、ルールは関数。Foundry が Ontology Manager と Functions の間で行っているのと同じ分割です。
+**なぜ YAML ではなく TypeScript で定義するのか？** 業務ルールはコードだからです。YAML に埋め込まれたルール式言語は、場当たり的なルールエンジンに育ちがちです。TypeScript のオブジェクトリテラルなら、モデルの列挙可能性を保ったまま、ルールを普通の型付きコードとして書けます（モデルは自分自身の内側 — ルールの `object` と `params`、edit が運ぶ変更、リンクの両端 — も、ランタイムの呼び出し側も、同じように型付けします）。構造はデータ、ルールは関数。Foundry が Ontology Manager と Functions の間で行っているのと同じ分割です。
 
 **トランザクションとロールバックは？** 3 つのドメインに 3 つの答えがあります。データセットの版管理とロールバックはデータ層の仕事（Foundry ではカタログのトランザクションとブランチ）。アクションの編集を原子的に適用するのはこの層の仕事（ここでは実際の SQLite トランザクションで実装）。システム横断の write-back の整合性機構は実装定義であり、パターンが要求するのは宣言です。本実装は write-back 先行の順序を宣言しています（[失敗時のセマンティクス](#失敗時のセマンティクス)参照）。
 
@@ -273,7 +274,7 @@ const ontology = defineOntology({
 
 ## ステータス
 
-v0.3 — リファレンス実装。この版では、ランタイムの呼び出し側をモデルから型付けしました。オブジェクト型名、リンク型名、アクション名が補完と検査の対象になり、インスタンスの形はプロパティスキーマから、`traverse` の戻り値はリンクの両端と方向から、`execute` の params はアクションのパラメータスキーマから決まります。`OntologyDef` としてしか型付けされていない定義は、従来どおり untyped の契約で動きます。過去の版は [release notes](https://github.com/gura105/operational-ontology/releases) にあります。v0.2 は、4 つの性質を超えて本実装が勝手に誓っていたことを強制する機構を取り除いた版でした。
+v0.4 — リファレンス実装。この版では、定義そのものを型付けしました。リンクとアクションはオブジェクト型を値で参照するので、ルールの `object` と `params` は型付きになり、edit が運ぶ変更はそれが名指すオブジェクト型に対して検査され、モデルに無いオブジェクト型を参照するリンクやアクションはランタイムが見る前に型検査で拒否されます。すべての定義は自分の名前を持ち、`defineOntology` が定義からモデルを組み立てます。v0.3 はランタイムの呼び出し側を型付けした版で、過去の版は [release notes](https://github.com/gura105/operational-ontology/releases) にあります。
 
 現時点の制約は、そのまま次版の作業リストです。
 
@@ -281,7 +282,6 @@ v0.3 — リファレンス実装。この版では、ランタイムの呼び�
 - 生成は ontology-owned な型に限る。write-back で運ぶ source-backed な生成は未実証
 - 削除は未対応
 - リンク属性と複合主キーは未対応
-- ルールコンテキストはモデルから型付けされていない。アクション内部の `ctx.object` と edit の payload は untyped のまま。ランタイムの呼び出し側は型付け済み
 - ネストしたプロパティの strict な検証は未対応
 
 本実装の宣言を支える機構の詳細は[実装ノート](./IMPLEMENTATION.ja.md)にまとめてあります。Node 24、better-sqlite3、zod 4、MCP SDK 1.29 でビルド・検証済み。

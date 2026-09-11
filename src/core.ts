@@ -26,12 +26,46 @@ import { z } from 'zod'
 import type { Database } from 'better-sqlite3'
 
 // ───────────────────────────── Definitions ─────────────────────────────
+//
+// Definitions reference each other by value, not by name: a link's ends and
+// an action's object are the object type definitions themselves, and edit
+// constructors take the definition they change. Names exist — every
+// definition carries one, and the store, the audit log, and the MCP tool
+// surface speak in names — but inside the model a reference is a value,
+// so the type of what it refers to is known where it is used: `ctx.object`
+// in a rule, the changes in a `modify`, the ends of a traversal.
 
 export type Properties = z.ZodRawShape
 
-export interface ObjectTypeDef<S extends Properties = Properties> {
+/** `any` is the untyped fallback's marker: whatever it names, we know nothing about. */
+type IsAny<X> = 0 extends 1 & X ? true : false
+
+/** The instance shape an object type's property schema produces. */
+export type InstanceOf<D> =
+  IsAny<D> extends true
+    ? Record<string, unknown>
+    : D extends ObjectTypeDef<infer S, any>
+      ? IsAny<S> extends true
+        ? Record<string, unknown>
+        : z.output<z.ZodObject<S>>
+      : Record<string, unknown>
+
+/** What a caller supplies for an instance, or for a change to one — the schema's input side. */
+export type InputOf<D> =
+  IsAny<D> extends true
+    ? Record<string, unknown>
+    : D extends ObjectTypeDef<infer S, any>
+      ? IsAny<S> extends true
+        ? Record<string, unknown>
+        : z.input<z.ZodObject<S>>
+      : Record<string, unknown>
+
+/** What a property schema produces, given the shape alone. */
+type OutputOf<S extends Properties> = IsAny<S> extends true ? Record<string, unknown> : z.output<z.ZodObject<S>>
+
+export interface ObjectTypeInput<S extends Properties = Properties> {
   /** Property that uniquely identifies an object of this type. Must be a string property. */
-  primaryKey: string
+  primaryKey: keyof S & string
   /**
    * Property schema. Validates rows at indexing time and edits at write time,
    * and is reused verbatim to generate MCP tool schemas. Schemas must
@@ -54,7 +88,7 @@ export interface ObjectTypeDef<S extends Properties = Properties> {
    *   source has no authority over them); they start at the declared default,
    *   change only through actions, and survive re-indexing via the overlay.
    */
-  owned?: true | Record<string, unknown>
+  owned?: true | Partial<z.input<z.ZodObject<S>>>
   /**
    * Row-level visibility, attached to the model (an optional slot). Absent
    * means visible to everyone: this reference implementation is fail-open by
@@ -63,7 +97,7 @@ export interface ObjectTypeDef<S extends Properties = Properties> {
    * deployment makes this slot required rather than optional, on top of an
    * authenticated identity layer. See "permissions and security" in the README.
    */
-  visibility?: (ctx: { object: Record<string, unknown>; actor: string }) => boolean
+  visibility?: (ctx: { object: OutputOf<S>; actor: string }) => boolean
   /**
    * Where the rows physically come from (documentation only — the integration
    * itself belongs to the data layer, outside the ontology).
@@ -72,7 +106,16 @@ export interface ObjectTypeDef<S extends Properties = Properties> {
   description?: string
 }
 
-export function defineObject<S extends Properties>(def: ObjectTypeDef<S>): ObjectTypeDef<S> {
+/** An object type: its name, and everything `defineObject` was given. */
+export interface ObjectTypeDef<S extends Properties = Properties, N extends string = string> extends ObjectTypeInput<S> {
+  name: N
+}
+
+export function defineObject<const N extends string, S extends Properties>(
+  name: N,
+  def: ObjectTypeInput<S>,
+): ObjectTypeDef<S, N> {
+  if (!name) throw new Error('an object type needs a name')
   if (!Object.hasOwn(def.properties, def.primaryKey)) {
     throw new Error(`primaryKey "${def.primaryKey}" is not one of the defined properties`)
   }
@@ -98,7 +141,7 @@ export function defineObject<S extends Properties>(def: ObjectTypeDef<S>): Objec
       }
     }
   }
-  return def
+  return { name, ...def }
 }
 
 /**
@@ -115,7 +158,10 @@ function isPlainJson(value: unknown): boolean {
   }
 }
 
-export interface LinkTypeDef<From extends string = string, To extends string = string> {
+export interface LinkTypeInput<
+  From extends ObjectTypeDef<any, any> = ObjectTypeDef<any, any>,
+  To extends ObjectTypeDef<any, any> = ObjectTypeDef<any, any>,
+> {
   from: From
   to: To
   /**
@@ -136,10 +182,21 @@ export interface LinkTypeDef<From extends string = string, To extends string = s
   description?: string
 }
 
-export function defineLink<From extends string, To extends string>(
-  def: LinkTypeDef<From, To>,
-): LinkTypeDef<From, To> {
-  return def
+/** A link type: its name, and the two object types it connects, by reference. */
+export interface LinkTypeDef<
+  From extends ObjectTypeDef<any, any> = ObjectTypeDef<any, any>,
+  To extends ObjectTypeDef<any, any> = ObjectTypeDef<any, any>,
+  N extends string = string,
+> extends LinkTypeInput<From, To> {
+  name: N
+}
+
+export function defineLink<const N extends string, From extends ObjectTypeDef<any, any>, To extends ObjectTypeDef<any, any>>(
+  name: N,
+  def: LinkTypeInput<From, To>,
+): LinkTypeDef<From, To, N> {
+  if (!name) throw new Error('a link type needs a name')
+  return { name, ...def }
 }
 
 /** A machine-readable refusal. Agents and UIs receive this, not a stack trace. */
@@ -156,6 +213,10 @@ export function reject(code: string, message: string): Violation {
  * Edits are data: what an action wants to change, decoupled from how it is
  * applied. Links are edits too — actions can rewire the graph itself, not
  * just node properties. (Deletes are out of scope in v0.2 — see the README.)
+ *
+ * An edit names its object or link type: it travels to the audit log and
+ * the write-back adapter as plain data. The constructors below take the
+ * definition instead, so what they are given is typed by it.
  */
 export type Edit =
   | { op: 'modify'; object: string; pk: string; changes: Record<string, unknown> }
@@ -163,20 +224,30 @@ export type Edit =
   | { op: 'link'; link: string; from: string; to: string }
   | { op: 'unlink'; link: string; from: string; to: string }
 
-export const modify = (object: string, pk: string, changes: Record<string, unknown>): Edit => ({
+export const modify = <D extends ObjectTypeDef<any, any>>(object: D, pk: string, changes: Partial<InputOf<D>>): Edit => ({
   op: 'modify',
-  object,
+  object: object.name,
   pk,
-  changes,
+  changes: changes as Record<string, unknown>,
 })
-export const create = (object: string, pk: string, data: Record<string, unknown>): Edit => ({
+export const create = <D extends ObjectTypeDef<any, any>>(object: D, pk: string, data: InputOf<D>): Edit => ({
   op: 'create',
-  object,
+  object: object.name,
   pk,
-  data,
+  data: data as Record<string, unknown>,
 })
-export const link = (linkName: string, from: string, to: string): Edit => ({ op: 'link', link: linkName, from, to })
-export const unlink = (linkName: string, from: string, to: string): Edit => ({ op: 'unlink', link: linkName, from, to })
+export const link = (linkType: LinkTypeDef<any, any, any>, from: string, to: string): Edit => ({
+  op: 'link',
+  link: linkType.name,
+  from,
+  to,
+})
+export const unlink = (linkType: LinkTypeDef<any, any, any>, from: string, to: string): Edit => ({
+  op: 'unlink',
+  link: linkType.name,
+  from,
+  to,
+})
 
 export interface ActionCtx<O = Record<string, unknown>, P = Record<string, unknown>> {
   /** The object the action targets, loaded from the ontology store. */
@@ -185,15 +256,11 @@ export interface ActionCtx<O = Record<string, unknown>, P = Record<string, unkno
   actor: string
 }
 
-/**
- * The schema side of an action — its type. Each `execute()` call is one
- * instance of it, applied or refused, recorded as an audit entry.
- */
-export interface ActionDef<S extends Properties = Properties> {
-  /** Object type this action operates on. */
-  object: string
+export interface ActionInput<O extends ObjectTypeDef<any, any> = ObjectTypeDef<any, any>, S extends Properties = Properties> {
+  /** The object type this action operates on — the definition itself, so `ctx.object` is typed by it. */
+  object: O
   /** Name of the param that carries the target's primary key. */
-  targetParam: string
+  targetParam: keyof S & string
   /** Parameter schema. Reused verbatim as the MCP tool input schema. */
   params: S
   description?: string
@@ -203,14 +270,14 @@ export interface ActionDef<S extends Properties = Properties> {
    * cancelled"), not access control — a permission system decides *who* may
    * act; preconditions decide *whether the operation is valid at all*.
    */
-  preconditions: Array<(ctx: ActionCtx<any, any>) => Violation | void>
+  preconditions: Array<(ctx: ActionCtx<InstanceOf<O>, OutputOf<S>>) => Violation | void>
   /**
    * The changes this action makes, described as data. Effects must be pure:
    * they describe edits, they do not perform them. Reaching into external
    * systems from here bypasses write-back ordering and the audit log — side
    * effects belong to the WritebackAdapter.
    */
-  effects: (ctx: ActionCtx<any, any>) => Edit[]
+  effects: (ctx: ActionCtx<InstanceOf<O>, OutputOf<S>>) => Edit[]
   /**
    * Authority declaration for this action's changes. `writeback: true`
    * declares them source-backed: the edit plan is routed through the
@@ -222,37 +289,106 @@ export interface ActionDef<S extends Properties = Properties> {
   writeback?: boolean
 }
 
-export function defineAction<S extends Properties>(def: ActionDef<S>): ActionDef<S> {
+/**
+ * The schema side of an action — its type. Each `execute()` call is one
+ * instance of it, applied or refused, recorded as an audit entry.
+ */
+export interface ActionDef<
+  O extends ObjectTypeDef<any, any> = ObjectTypeDef<any, any>,
+  S extends Properties = Properties,
+  N extends string = string,
+> extends ActionInput<O, S> {
+  name: N
+}
+
+export function defineAction<const N extends string, O extends ObjectTypeDef<any, any>, S extends Properties>(
+  name: N,
+  def: ActionInput<O, S>,
+): ActionDef<O, S, N> {
+  if (!name) throw new Error('an action needs a name')
   if (!Object.hasOwn(def.params, def.targetParam)) {
     throw new Error(`targetParam "${def.targetParam}" is not one of the action's params`)
   }
-  return def
+  return { name, ...def }
 }
 
+/**
+ * The model, resolved: every kind of definition indexed by its name. This is
+ * what the runtime interprets and what `Runtime<T>` is typed by. It is
+ * built by `defineOntology` from the definitions themselves.
+ */
 export interface OntologyDef {
   name: string
-  objects: Record<string, ObjectTypeDef<any>>
-  // `any` ends, not `string`: as the contextual type of a definition literal,
-  // `LinkTypeDef<string, string>` would widen the literal names a nested
-  // defineLink() call inferred — and the model-derived types below need them.
-  links: Record<string, LinkTypeDef<any, any>>
-  actions: Record<string, ActionDef<any>>
+  objects: Record<string, ObjectTypeDef<any, any>>
+  links: Record<string, LinkTypeDef<any, any, any>>
+  actions: Record<string, ActionDef<any, any, any>>
 }
 
-export function defineOntology<T extends OntologyDef>(def: T): T {
-  for (const [name, link] of Object.entries(def.links)) {
-    for (const end of [link.from, link.to]) {
-      if (!Object.hasOwn(def.objects, end)) {
-        throw new Error(`link "${name}" references unknown object type "${end}"`)
+/** Definitions of one kind, indexed by their names. */
+export type ByName<D extends { name: string }> = { [X in D as X['name']]: X }
+
+export interface Ontology<
+  O extends ObjectTypeDef<any, any>,
+  L extends LinkTypeDef<any, any, any>,
+  A extends ActionDef<any, any, any>,
+> {
+  name: string
+  objects: ByName<O>
+  links: ByName<L>
+  actions: ByName<A>
+}
+
+/**
+ * Assemble a model from its definitions. Links and actions reference object
+ * types by value, so the type checker already refuses a link or an action
+ * whose object type is not among `objects`; the runtime checks the same by
+ * identity, and that no two definitions of a kind share a name.
+ *
+ * (Why the action membership check is written on the array element rather
+ * than on `A`'s constraint: a typed action's rules take a typed `ctx`, so
+ * comparing it structurally against `ActionDef<any, …> & { object: O }`
+ * would fail on the callbacks' parameter; `A extends ActionDef<any, …>`
+ * is compared by type arguments instead, and `& { object: O }` on the
+ * element checks only the reference.)
+ */
+export function defineOntology<
+  O extends ObjectTypeDef<any, any>,
+  L extends LinkTypeDef<O, O, any>,
+  A extends ActionDef<any, any, any>,
+>(def: {
+  name: string
+  objects: readonly O[]
+  links?: readonly L[]
+  actions?: readonly (A & { object: O })[]
+}): Ontology<O, L, A> {
+  const index = <D extends { name: string }>(kind: string, defs: readonly D[]): Record<string, D> => {
+    const out: Record<string, D> = {}
+    for (const d of defs) {
+      if (Object.hasOwn(out, d.name)) throw new Error(`two ${kind} types are named "${d.name}"`)
+      out[d.name] = d
+    }
+    return out
+  }
+  const objects = index('object', def.objects)
+  const known = (d: ObjectTypeDef<any, any>) => objects[d.name] === d
+  for (const l of def.links ?? []) {
+    for (const end of [l.from, l.to]) {
+      if (!known(end)) {
+        throw new Error(`link "${l.name}" references object type "${end.name}", which is not one of the ontology's objects`)
       }
     }
   }
-  for (const [name, action] of Object.entries(def.actions)) {
-    if (!Object.hasOwn(def.objects, action.object)) {
-      throw new Error(`action "${name}" references unknown object type "${action.object}"`)
+  for (const a of def.actions ?? []) {
+    if (!known(a.object)) {
+      throw new Error(`action "${a.name}" references object type "${a.object.name}", which is not one of the ontology's objects`)
     }
   }
-  return def
+  return {
+    name: def.name,
+    objects: objects as ByName<O>,
+    links: index('link', def.links ?? []) as ByName<L>,
+    actions: index('action', def.actions ?? []) as ByName<A>,
+  }
 }
 
 // ───────────────────────────── Model-derived types ─────────────────────────────
@@ -269,19 +405,12 @@ export type LinkName<T extends OntologyDef> = keyof T['links'] & string
 export type ActionName<T extends OntologyDef> = keyof T['actions'] & string
 export type Direction = 'forward' | 'reverse'
 
-/** `any` is the untyped fallback's marker: whatever it names, we know nothing about. */
-type IsAny<X> = 0 extends 1 & X ? true : false
-
 /** The instance shape of object type `K`, as its property schema produces it. */
 export type ObjectOf<T extends OntologyDef, K> =
   IsAny<K> extends true
     ? Record<string, unknown>
     : K extends ObjectName<T>
-      ? T['objects'][K] extends ObjectTypeDef<infer S>
-        ? IsAny<S> extends true
-          ? Record<string, unknown>
-          : z.infer<z.ZodObject<S>>
-        : Record<string, unknown>
+      ? InstanceOf<T['objects'][K]>
       : Record<string, unknown>
 
 /**
@@ -302,16 +431,16 @@ export type LinkEnd<T extends OntologyDef, L extends LinkName<T>, O extends { di
   O extends unknown
     ? 'direction' extends keyof O
       ? O extends { direction: 'reverse' }
-        ? T['links'][L]['from']
+        ? T['links'][L]['from']['name']
         : Exclude<O['direction'], undefined> extends 'forward'
-          ? T['links'][L]['to']
-          : T['links'][L]['from'] | T['links'][L]['to']
-      : T['links'][L]['to']
+          ? T['links'][L]['to']['name']
+          : T['links'][L]['from']['name'] | T['links'][L]['to']['name']
+      : T['links'][L]['to']['name']
     : never
 
 /** What a caller passes to action `A` — its parameter schema's input side. */
 export type ParamsOf<T extends OntologyDef, A extends ActionName<T>> =
-  T['actions'][A] extends ActionDef<infer S>
+  T['actions'][A] extends ActionDef<any, infer S, any>
     ? IsAny<S> extends true
       ? Record<string, unknown>
       : z.input<z.ZodObject<S>>
@@ -567,8 +696,8 @@ export class Runtime<T extends OntologyDef = OntologyDef> {
     if (!link) throw new Error(`unknown link type "${linkName}"`)
     const [where, select, targetType, originType] =
       (opts.direction ?? 'forward') === 'forward'
-        ? ['from_pk', 'to_pk', link.to, link.from]
-        : ['to_pk', 'from_pk', link.from, link.to]
+        ? ['from_pk', 'to_pk', link.to.name, link.from.name]
+        : ['to_pk', 'from_pk', link.from.name, link.to.name]
     // A hidden origin leaks nothing: traversal from an object the actor
     // cannot see behaves exactly like traversal from a missing one.
     if (!this.#read(originType, pk, opts.actor)) return []
@@ -634,7 +763,7 @@ export class Runtime<T extends OntologyDef = OntologyDef> {
       return { ok: false, error }
     }
 
-    const action: ActionDef | undefined = Object.hasOwn(this.ontology.actions, actionName)
+    const action: ActionDef<any, any, any> | undefined = Object.hasOwn(this.ontology.actions, actionName)
       ? this.ontology.actions[actionName]
       : undefined
     if (!action) {
@@ -643,7 +772,7 @@ export class Runtime<T extends OntologyDef = OntologyDef> {
 
     const guessTarget = () => {
       const guessed = raw[action.targetParam]
-      return `${action.object}/${guessed != null ? String(guessed) : '(invalid)'}`
+      return `${action.object.name}/${guessed != null ? String(guessed) : '(invalid)'}`
     }
 
     // Params are stored verbatim in the audit log, so they must be values
@@ -664,7 +793,7 @@ export class Runtime<T extends OntologyDef = OntologyDef> {
     }
 
     const pk = String(parsed.data[action.targetParam])
-    const target = `${action.object}/${pk}`
+    const target = `${action.object.name}/${pk}`
     const refuse = (error: Violation, edits?: Edit[]): ActionResult => refuseAs(target, parsed.data, error, edits)
 
     // Crashes are attempts too — audited as EXECUTION_CRASHED, then the
@@ -683,10 +812,10 @@ export class Runtime<T extends OntologyDef = OntologyDef> {
 
     let object: Record<string, unknown> | undefined
     try {
-      object = this.#fetch(action.object, pk)
+      object = this.#fetch(action.object.name, pk)
       // Visibility gates action targets too: an object the actor cannot see
       // is TARGET_NOT_FOUND — same as a missing one, so existence never leaks.
-      if (object !== undefined && !this.#visible(action.object, object, opts.actor)) object = undefined
+      if (object !== undefined && !this.#visible(action.object.name, object, opts.actor)) object = undefined
     } catch (e) {
       crashed(e)
     }
@@ -770,7 +899,7 @@ export class Runtime<T extends OntologyDef = OntologyDef> {
         this.#writeback.apply(structuredClone(edits), {
           action: actionName,
           actor: opts.actor,
-          target: { type: action.object, pk, object: structuredClone(object) },
+          target: { type: action.object.name, pk, object: structuredClone(object) },
         })
       } catch (e) {
         // The adapter may have partially applied the plan before throwing —
@@ -960,18 +1089,18 @@ export class Runtime<T extends OntologyDef = OntologyDef> {
         if (!linkDef) throw new Error(`unknown link type "${edit.link}"`)
         if (edit.op === 'link') {
           // A link is a statement about two objects — both endpoints must exist.
-          if (!this.#fetch(linkDef.from, edit.from))
-            throw new Error(`cannot link: ${linkDef.from}/${edit.from} does not exist`)
-          if (!this.#fetch(linkDef.to, edit.to))
-            throw new Error(`cannot link: ${linkDef.to}/${edit.to} does not exist`)
+          if (!this.#fetch(linkDef.from.name, edit.from))
+            throw new Error(`cannot link: ${linkDef.from.name}/${edit.from} does not exist`)
+          if (!this.#fetch(linkDef.to.name, edit.to))
+            throw new Error(`cannot link: ${linkDef.to.name}/${edit.to} does not exist`)
           if (linkDef.kind === 'one-to-many') {
             const existing = this.#db
               .prepare('SELECT from_pk FROM links WHERE name = ? AND to_pk = ? AND from_pk != ?')
               .get(edit.link, edit.to, edit.from) as { from_pk: string } | undefined
             if (existing)
               throw new Error(
-                `cannot link: ${linkDef.to}/${edit.to} is already linked to ` +
-                  `${linkDef.from}/${existing.from_pk} via "${edit.link}" (one-to-many — unlink first)`,
+                `cannot link: ${linkDef.to.name}/${edit.to} is already linked to ` +
+                  `${linkDef.from.name}/${existing.from_pk} via "${edit.link}" (one-to-many — unlink first)`,
               )
           }
           this.#db
@@ -1056,15 +1185,15 @@ export class Runtime<T extends OntologyDef = OntologyDef> {
         .all(name) as Array<{ from_pk: string; to_pk: string }>
       const parentOf = new Map<string, string>()
       for (const { from_pk, to_pk } of rows) {
-        if (!this.#fetch(link.from, from_pk))
-          throw new Error(`link "${name}": ${link.from}/${from_pk} does not exist`)
-        if (!this.#fetch(link.to, to_pk))
-          throw new Error(`link "${name}": ${link.to}/${to_pk} does not exist`)
+        if (!this.#fetch(link.from.name, from_pk))
+          throw new Error(`link "${name}": ${link.from.name}/${from_pk} does not exist`)
+        if (!this.#fetch(link.to.name, to_pk))
+          throw new Error(`link "${name}": ${link.to.name}/${to_pk} does not exist`)
         if (link.kind === 'one-to-many') {
           const previous = parentOf.get(to_pk)
           if (previous !== undefined && previous !== from_pk) {
             throw new Error(
-              `link "${name}": ${link.to}/${to_pk} is linked to more than one ${link.from} (one-to-many)`,
+              `link "${name}": ${link.to.name}/${to_pk} is linked to more than one ${link.from.name} (one-to-many)`,
             )
           }
           parentOf.set(to_pk, from_pk)

@@ -134,9 +134,9 @@ export function buildMcpServer(rt: Runtime, opts: { agent?: string } = {}): McpS
       toolName(`traverse_${snake(linkName)}`, `link type ${linkName}`),
       {
         description:
-          `Traverse the ${link.from} → ${link.to} link "${linkName}" (${link.kind}). ` +
-          `direction=forward: pass a ${link.from} pk, get linked ${link.to} objects. ` +
-          `direction=reverse: pass a ${link.to} pk, get linked ${link.from} objects.`,
+          `Traverse the ${link.from.name} → ${link.to.name} link "${linkName}" (${link.kind}). ` +
+          `direction=forward: pass a ${link.from.name} pk, get linked ${link.to.name} objects. ` +
+          `direction=reverse: pass a ${link.to.name} pk, get linked ${link.from.name} objects.`,
         inputSchema: {
           pk: z.string(),
           direction: z.enum(['forward', 'reverse']).default('forward'),
@@ -152,7 +152,7 @@ export function buildMcpServer(rt: Runtime, opts: { agent?: string } = {}): McpS
       toolName(snake(actionName), `action ${actionName}`),
       {
         description:
-          `${action.description ?? `Action on ${action.object}.`} ` +
+          `${action.description ?? `Action on ${action.object.name}.`} ` +
           'Writes are gated: if a business rule rejects this call, the error is ' +
           'machine-readable ({ code, message }) and the attempt is recorded in the audit log.',
         inputSchema: action.params,

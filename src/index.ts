@@ -13,11 +13,18 @@ export {
   unlink,
 } from './core.js'
 export type {
+  ObjectTypeInput,
   ObjectTypeDef,
+  LinkTypeInput,
   LinkTypeDef,
+  ActionInput,
   ActionDef,
   ActionCtx,
+  Ontology,
   OntologyDef,
+  ByName,
+  InstanceOf,
+  InputOf,
   ObjectName,
   LinkName,
   ActionName,

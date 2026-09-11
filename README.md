@@ -116,42 +116,43 @@ https://github.com/user-attachments/assets/28327062-e09f-4103-943e-434a0e55b327
 The model defines three kinds of types: object types, link types, and action types. At runtime their instances — objects, links, and applied actions — live in the store. The remaining two concepts connect the pairs: edits are the changes to objects and links that an action instance describes, and the audit log is where the action instances themselves are recorded. All five concepts are defined as data and interpreted by a runtime (`src/core.ts`):
 
 ```ts
+const Customer = defineObject('Customer', {
+  primaryKey: 'id',
+  properties: { id: z.string(), name: z.string(), region: z.string() },
+})
+
+const Order = defineObject('Order', {
+  primaryKey: 'id',
+  properties: {
+    id: z.string(),
+    status: z.enum(['pending', 'shipped', 'cancelled']),
+    total: z.number().int(), // minor units — money is not a float
+    assignee: z.string().nullable(),
+  },
+  owned: { assignee: null },                       // the ontology's own state, declared
+  source: 'north.tbl_order ∪ south.SALES_ORDER',   // physical data comes first
+})
+
+const customerOrders = defineLink('customerOrders', { from: Customer, to: Order, kind: 'one-to-many' })
+
+const cancelOrder = defineAction('cancelOrder', {
+  object: Order,                                   // the definition itself: `object` in the rules is typed by it
+  targetParam: 'orderId',
+  params: { orderId: z.string(), reason: z.string().min(1) },
+  preconditions: [
+    ({ object }) => object.status === 'shipped'
+      ? reject('SHIPPED_ORDER_CANNOT_BE_CANCELLED', `order ${object.id} has already shipped`)
+      : undefined,
+  ],
+  effects: ({ object }) => [modify(Order, object.id, { status: 'cancelled' })],
+  writeback: true,
+})
+
 const ontology = defineOntology({
   name: 'orders',
-  objects: {
-    Customer: defineObject({
-      primaryKey: 'id',
-      properties: { id: z.string(), name: z.string(), region: z.string() },
-    }),
-    Order: defineObject({
-      primaryKey: 'id',
-      properties: {
-        id: z.string(),
-        status: z.enum(['pending', 'shipped', 'cancelled']),
-        total: z.number().int(), // minor units — money is not a float
-        assignee: z.string().nullable(),
-      },
-      owned: { assignee: null },                       // the ontology's own state, declared
-      source: 'north.tbl_order ∪ south.SALES_ORDER',   // physical data comes first
-    }),
-  },
-  links: {
-    customerOrders: defineLink({ from: 'Customer', to: 'Order', kind: 'one-to-many' }),
-  },
-  actions: {
-    cancelOrder: defineAction({
-      object: 'Order',
-      targetParam: 'orderId',
-      params: { orderId: z.string(), reason: z.string().min(1) },
-      preconditions: [
-        ({ object }) => object.status === 'shipped'
-          ? reject('SHIPPED_ORDER_CANNOT_BE_CANCELLED', `order ${object.id} has already shipped`)
-          : undefined,
-      ],
-      effects: ({ object }) => [modify('Order', object.id, { status: 'cancelled' })],
-      writeback: true,
-    }),
-  },
+  objects: [Customer, Order],
+  links: [customerOrders],
+  actions: [cancelOrder],
 })
 ```
 
@@ -235,7 +236,7 @@ Scope is frozen for v0 so the reference implementation stays small enough to rea
 
 **Why not OWL/RDF?** Those model what things *are* (semantic). Half of this pattern is what you can *do* (kinetic): actions, preconditions, audit, write-back. A reasoner cannot cancel an order.
 
-**Why TypeScript definitions instead of YAML?** Because business rules are code, and rule-expression languages embedded in YAML tend to grow into ad-hoc rule engines. TypeScript object literals keep the model enumerable while the rules stay ordinary typed code. (The model types the runtime's call sites — object, link, and action names, instance shapes, action params — but not yet the rule contexts inside actions; see [Status](#status).) Structure as data, rules as functions — the same split Foundry makes between Ontology Manager and Functions.
+**Why TypeScript definitions instead of YAML?** Because business rules are code, and rule-expression languages embedded in YAML tend to grow into ad-hoc rule engines. TypeScript object literals keep the model enumerable while the rules stay ordinary typed code. (The model types its own insides — a rule's `object` and `params`, the changes an edit carries, the ends of a link — and the runtime's call sites alike.) Structure as data, rules as functions — the same split Foundry makes between Ontology Manager and Functions.
 
 **What about transactions and rollback?** Three domains, three answers. Dataset versioning and rollback belong to the data layer (in Foundry: catalog transactions and branching). Atomic application of an action's edits belongs to this layer (implemented here as a real SQLite transaction). The consistency mechanism for cross-system write-back is implementation-defined; the pattern requires it to be declared, and this implementation declares write-back-first ordering (see [Failure semantics](#failure-semantics)).
 
@@ -267,7 +268,7 @@ Two design choices follow. `preconditions` is a required key, and an empty list 
 
 ## Status
 
-v0.3 — reference implementation. This version types the runtime's call sites by the model: object, link, and action names complete and check, instance shapes come from the property schemas, `traverse` resolves its result from the link's ends and the direction, and `execute` checks params against the action's parameter schema. A definition typed only as `OntologyDef` keeps the untyped contract. Earlier versions are described in the [release notes](https://github.com/gura105/operational-ontology/releases); v0.2 subtracted the mechanisms that enforced vows beyond the four properties.
+v0.4 — reference implementation. This version types the definitions themselves. Links and actions reference object types by value, so a rule sees its `object` and `params` typed, the changes an edit carries are checked against the object type it names, and a link or an action whose object type is not in the model is refused by the type checker before the runtime sees it. Every definition carries its name, and `defineOntology` assembles the model from the definitions. v0.3 typed the runtime's call sites; earlier versions are described in the [release notes](https://github.com/gura105/operational-ontology/releases).
 
 Current limitations, which are also the worklist for the next version:
 
@@ -275,7 +276,6 @@ Current limitations, which are also the worklist for the next version:
 - Creation is limited to ontology-owned types; source-backed creation carried by write-back is not demonstrated yet.
 - No deletes.
 - No link properties or composite keys.
-- Rule contexts are not typed by the model: `ctx.object` and edit payloads are untyped inside actions, while the runtime's call sites are.
 - Nested properties are not validated strictly.
 
 The mechanics behind this implementation's declarations are in the [implementation notes](./IMPLEMENTATION.md). Built and verified with Node 24, better-sqlite3, zod 4, MCP SDK 1.29.

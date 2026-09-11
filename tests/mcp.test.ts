@@ -124,8 +124,8 @@ test('aggregate rejects property names the model does not define', async () => {
 test('wrapped numeric properties (nullable/optional/defaulted/stacked) are still summable', async () => {
   const mini = defineOntology({
     name: 'mini',
-    objects: {
-      Thing: defineObject({
+    objects: [
+      defineObject('Thing', {
         primaryKey: 'id',
         properties: {
           id: z.string(),
@@ -135,9 +135,7 @@ test('wrapped numeric properties (nullable/optional/defaulted/stacked) are still
           depth: z.number().nullable().optional(),
         },
       }),
-    },
-    links: {},
-    actions: {},
+    ],
   })
   const rt = createRuntime(mini, new Database(':memory:'))
   rt.load({ objects: { Thing: [
@@ -179,21 +177,19 @@ test('an agent write creates ontology-owned state that survives re-indexing', as
 })
 
 test('derived tool names that collide fail at build time, both origins named', () => {
+  const Order = defineObject('Order', { primaryKey: 'id', properties: { id: z.string() } })
   const clash = defineOntology({
     name: 'clash',
-    objects: {
-      Order: defineObject({ primaryKey: 'id', properties: { id: z.string() } }),
-    },
-    links: {},
-    actions: {
-      searchOrder: defineAction({
-        object: 'Order',
+    objects: [Order],
+    actions: [
+      defineAction('searchOrder', {
+        object: Order,
         targetParam: 'id',
         params: { id: z.string() },
         preconditions: [],
         effects: () => [],
       }),
-    },
+    ],
   })
   const rt = createRuntime(clash, new Database(':memory:'))
   // Both origins are named, so the fix is findable from the error alone.

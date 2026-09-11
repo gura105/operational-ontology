@@ -21,39 +21,38 @@ import {
   type WritebackAdapter,
 } from '../src/core.js'
 
+const Customer = defineObject('Customer', {
+  primaryKey: 'id',
+  properties: { id: z.string(), name: z.string() },
+})
+const Order = defineObject('Order', {
+  primaryKey: 'id',
+  properties: {
+    id: z.string(),
+    status: z.enum(['pending', 'shipped', 'cancelled']),
+    total: z.number(),
+    assignee: z.string().nullable(),
+  },
+  // The authority line, drawn per property: assignee is ontology-owned,
+  // everything else is source-backed.
+  owned: { assignee: null },
+})
+const Task = defineObject('Task', {
+  // The whole type is ontology-owned — existence included.
+  primaryKey: 'id',
+  owned: true,
+  properties: { id: z.string(), title: z.string() },
+})
+const customerOrders = defineLink('customerOrders', { from: Customer, to: Order, kind: 'one-to-many' })
+const orderTasks = defineLink('orderTasks', { from: Order, to: Task, kind: 'one-to-many', owned: true })
+
 const ontology = defineOntology({
   name: 'test',
-  objects: {
-    Customer: defineObject({
-      primaryKey: 'id',
-      properties: { id: z.string(), name: z.string() },
-    }),
-    Order: defineObject({
-      primaryKey: 'id',
-      properties: {
-        id: z.string(),
-        status: z.enum(['pending', 'shipped', 'cancelled']),
-        total: z.number(),
-        assignee: z.string().nullable(),
-      },
-      // The authority line, drawn per property: assignee is ontology-owned,
-      // everything else is source-backed.
-      owned: { assignee: null },
-    }),
-    Task: defineObject({
-      // The whole type is ontology-owned — existence included.
-      primaryKey: 'id',
-      owned: true,
-      properties: { id: z.string(), title: z.string() },
-    }),
-  },
-  links: {
-    customerOrders: defineLink({ from: 'Customer', to: 'Order', kind: 'one-to-many' }),
-    orderTasks: defineLink({ from: 'Order', to: 'Task', kind: 'one-to-many', owned: true }),
-  },
-  actions: {
-    cancelOrder: defineAction({
-      object: 'Order',
+  objects: [Customer, Order, Task],
+  links: [customerOrders, orderTasks],
+  actions: [
+    defineAction('cancelOrder', {
+      object: Order,
       targetParam: 'orderId',
       params: { orderId: z.string(), reason: z.string().min(1) },
       preconditions: [
@@ -62,21 +61,21 @@ const ontology = defineOntology({
             ? reject('SHIPPED_ORDER_CANNOT_BE_CANCELLED', `order ${object.id} has already shipped`)
             : undefined,
       ],
-      effects: ({ object }) => [modify('Order', object.id as string, { status: 'cancelled' })],
+      effects: ({ object }) => [modify(Order, object.id, { status: 'cancelled' })],
       writeback: true,
     }),
-    setAssignee: defineAction({
+    defineAction('setAssignee', {
       // Pure ontology-owned change: no write-back, survives re-indexing.
-      object: 'Order',
+      object: Order,
       targetParam: 'orderId',
       params: { orderId: z.string(), assignee: z.string().nullable() },
       preconditions: [],
-      effects: ({ object, params }) => [modify('Order', object.id as string, { assignee: params.assignee })],
+      effects: ({ object, params }) => [modify(Order, object.id, { assignee: params.assignee })],
     }),
-    reassignOrder: defineAction({
+    defineAction('reassignOrder', {
       // Rewires the graph itself: unlink + link, atomically. The link is
       // source-backed, so the plan declares write-back.
-      object: 'Order',
+      object: Order,
       targetParam: 'orderId',
       params: { orderId: z.string(), fromCustomerId: z.string(), toCustomerId: z.string() },
       preconditions: [
@@ -86,127 +85,131 @@ const ontology = defineOntology({
             : undefined,
       ],
       effects: ({ object, params }) => [
-        unlink('customerOrders', params.fromCustomerId as string, object.id as string),
-        link('customerOrders', params.toCustomerId as string, object.id as string),
+        unlink(customerOrders, params.fromCustomerId, object.id),
+        link(customerOrders, params.toCustomerId, object.id),
       ],
       writeback: true,
     }),
-    sloppyReassign: defineAction({
+    defineAction('sloppyReassign', {
       // Forgets the unlink — the runtime's cardinality check must catch it.
-      object: 'Order',
+      object: Order,
       targetParam: 'orderId',
       params: { orderId: z.string(), toCustomerId: z.string() },
       preconditions: [],
       effects: ({ object, params }) => [
-        link('customerOrders', params.toCustomerId as string, object.id as string),
+        link(customerOrders, params.toCustomerId, object.id),
       ],
       writeback: true,
     }),
-    sneakyCancel: defineAction({
+    defineAction('sneakyCancel', {
       // Touches source-backed state without declaring write-back — the
       // shadow copy the fourth property forbids.
-      object: 'Order',
+      object: Order,
       targetParam: 'orderId',
       params: { orderId: z.string() },
       preconditions: [],
-      effects: ({ object }) => [modify('Order', object.id as string, { status: 'cancelled' })],
+      effects: ({ object }) => [modify(Order, object.id, { status: 'cancelled' })],
     }),
-    vainWriteback: defineAction({
+    defineAction('vainWriteback', {
       // Declares write-back but changes nothing a source owns.
-      object: 'Order',
+      object: Order,
       targetParam: 'orderId',
       params: { orderId: z.string() },
       preconditions: [],
-      effects: ({ object }) => [modify('Order', object.id as string, { assignee: 'nobody' })],
+      effects: ({ object }) => [modify(Order, object.id, { assignee: 'nobody' })],
       writeback: true,
     }),
-    mixedTouch: defineAction({
+    defineAction('mixedTouch', {
       // One edit straddling the authority line.
-      object: 'Order',
+      object: Order,
       targetParam: 'orderId',
       params: { orderId: z.string() },
       preconditions: [],
-      effects: ({ object }) => [modify('Order', object.id as string, { status: 'cancelled', assignee: 'x' })],
+      effects: ({ object }) => [modify(Order, object.id, { status: 'cancelled', assignee: 'x' })],
       writeback: true,
     }),
-    mixedPlan: defineAction({
+    defineAction('mixedPlan', {
       // Two edits on opposite sides of the authority line.
-      object: 'Order',
+      object: Order,
       targetParam: 'orderId',
       params: { orderId: z.string() },
       preconditions: [],
       effects: ({ object }) => [
-        modify('Order', object.id as string, { status: 'cancelled' }),
-        modify('Order', object.id as string, { assignee: 'x' }),
+        modify(Order, object.id, { status: 'cancelled' }),
+        modify(Order, object.id, { assignee: 'x' }),
       ],
       writeback: true,
     }),
-    conjureSource: defineAction({
+    defineAction('conjureSource', {
       // A schema-valid creation of a source-backed object — undemonstrated
       // territory, so refused by declaration.
-      object: 'Order',
+      object: Order,
       targetParam: 'orderId',
       params: { orderId: z.string() },
       preconditions: [],
-      effects: () => [create('Order', 'N1', { id: 'N1', status: 'pending', total: 1, assignee: null })],
+      effects: () => [create(Order, 'N1', { id: 'N1', status: 'pending', total: 1, assignee: null })],
       writeback: true,
     }),
-    corruptOrder: defineAction({
+    defineAction('corruptOrder', {
       // Deliberately produces an edit that violates the Order schema —
       // used to prove the plan is refused before write-back ever runs.
-      object: 'Order',
+      object: Order,
       targetParam: 'orderId',
       params: { orderId: z.string() },
       preconditions: [],
-      effects: ({ object }) => [modify('Order', object.id as string, { status: 'bogus' })],
+      // @ts-expect-error not a status the schema knows — the runtime must refuse it too
+      effects: ({ object }) => [modify(Order, object.id, { status: 'bogus' })],
       writeback: true,
     }),
-    typoOrder: defineAction({
+    defineAction('typoOrder', {
       // A typo'd property — must be refused, not silently stripped.
-      object: 'Order',
+      object: Order,
       targetParam: 'orderId',
       params: { orderId: z.string() },
       preconditions: [],
-      effects: ({ object }) => [modify('Order', object.id as string, { vaporware: 1 })],
+      // @ts-expect-error not a property of Order
+      effects: ({ object }) => [modify(Order, object.id, { vaporware: 1 })],
       writeback: true,
     }),
-    conjureNoise: defineAction({
-      object: 'Order',
+    defineAction('conjureNoise', {
+      object: Order,
       targetParam: 'orderId',
       params: { orderId: z.string() },
       preconditions: [],
-      effects: () => [create('Order', 'N1', { id: 'N1', status: 'pending', total: 1, ghost: true })],
+      // @ts-expect-error not a property of Order
+      effects: () => [create(Order, 'N1', { id: 'N1', status: 'pending', total: 1, ghost: true })],
       writeback: true,
     }),
-    protoOrder: defineAction({
+    defineAction('protoOrder', {
       // Prototype-chain names must not masquerade as model properties.
-      object: 'Order',
+      object: Order,
       targetParam: 'orderId',
       params: { orderId: z.string() },
       preconditions: [],
-      effects: ({ object }) => [modify('Order', object.id as string, { toString: 'gotcha' })],
+      // @ts-expect-error a prototype name is not a property either
+      effects: ({ object }) => [modify(Order, object.id, { toString: 'gotcha' })],
       writeback: true,
     }),
-    hollowModify: defineAction({
+    defineAction('hollowModify', {
       // A modify that changes nothing — not an edit, refused.
-      object: 'Order',
+      object: Order,
       targetParam: 'orderId',
       params: { orderId: z.string() },
       preconditions: [],
-      effects: ({ object }) => [modify('Order', object.id as string, {})],
+      effects: ({ object }) => [modify(Order, object.id, {})],
     }),
-    idleWriteback: defineAction({
+    defineAction('idleWriteback', {
       // Declares write-back but produces an empty plan — nothing to route.
-      object: 'Order',
+      object: Order,
       targetParam: 'orderId',
       params: { orderId: z.string() },
       preconditions: [],
       effects: () => [],
       writeback: true,
     }),
-    landmine: defineAction({
+    defineAction('landmine', {
       // A crashing rule — must be audited as EXECUTION_CRASHED, not lost.
-      object: 'Order',
+      object: Order,
       targetParam: 'orderId',
       params: { orderId: z.string() },
       preconditions: [
@@ -216,8 +219,8 @@ const ontology = defineOntology({
       ],
       effects: () => [],
     }),
-    explodingEffects: defineAction({
-      object: 'Order',
+    defineAction('explodingEffects', {
+      object: Order,
       targetParam: 'orderId',
       params: { orderId: z.string() },
       preconditions: [],
@@ -225,62 +228,63 @@ const ontology = defineOntology({
         throw new Error('effects crashed')
       },
     }),
-    conjureOrder: defineAction({
+    defineAction('conjureOrder', {
       // Creates with a pk that disagrees with the data — the runtime must refuse.
-      object: 'Order',
+      object: Order,
       targetParam: 'orderId',
       params: { orderId: z.string() },
       preconditions: [],
-      effects: () => [create('Order', 'CLAIMED', { id: 'ACTUAL', status: 'pending', total: 1, assignee: null })],
+      effects: () => [create(Order, 'CLAIMED', { id: 'ACTUAL', status: 'pending', total: 1, assignee: null })],
     }),
-    mangleId: defineAction({
+    defineAction('mangleId', {
       // Tries to rewrite the primary key — the runtime must refuse.
-      object: 'Order',
+      object: Order,
       targetParam: 'orderId',
       params: { orderId: z.string() },
       preconditions: [],
-      effects: ({ object }) => [modify('Order', object.id as string, { id: 'HIJACKED' })],
+      effects: ({ object }) => [modify(Order, object.id, { id: 'HIJACKED' })],
     }),
-    sneakyCorrupt: defineAction({
+    defineAction('sneakyCorrupt', {
       // Two flaws at once — an invalid edit AND an undeclared source write.
       // Pins the declared refusal order: validity precedes authority.
-      object: 'Order',
+      object: Order,
       targetParam: 'orderId',
       params: { orderId: z.string() },
       preconditions: [],
-      effects: ({ object }) => [modify('Order', object.id as string, { status: 'bogus' })],
+      // @ts-expect-error not a status the schema knows — the runtime must refuse it too
+      effects: ({ object }) => [modify(Order, object.id, { status: 'bogus' })],
     }),
-    sloppierReassign: defineAction({
+    defineAction('sloppierReassign', {
       // A cardinality violation AND an undeclared source write — same order.
-      object: 'Order',
+      object: Order,
       targetParam: 'orderId',
       params: { orderId: z.string(), toCustomerId: z.string() },
       preconditions: [],
       effects: ({ object, params }) => [
-        link('customerOrders', params.toCustomerId as string, object.id as string),
+        link(customerOrders, params.toCustomerId, object.id),
       ],
     }),
-    protoUnlink: defineAction({
+    defineAction('protoUnlink', {
       // An unlink whose "link type" is a prototype name — unknown, refused.
-      object: 'Order',
+      object: Order,
       targetParam: 'orderId',
       params: { orderId: z.string() },
       preconditions: [],
-      effects: () => [unlink('toString', 'a', 'b')],
+      effects: () => [unlink({ name: 'toString', from: Order, to: Order, kind: 'one-to-many' }, 'a', 'b')],
     }),
-    openTask: defineAction({
+    defineAction('openTask', {
       // Creates an ontology-owned object and wires it to its order in one
       // atomic plan, behind the order's gate.
-      object: 'Order',
+      object: Order,
       targetParam: 'orderId',
       params: { orderId: z.string(), taskId: z.string().min(1), title: z.string().min(1) },
       preconditions: [],
       effects: ({ object, params }) => [
-        create('Task', params.taskId as string, { id: params.taskId, title: params.title }),
-        link('orderTasks', object.id as string, params.taskId as string),
+        create(Task, params.taskId, { id: params.taskId, title: params.title }),
+        link(orderTasks, object.id, params.taskId),
       ],
     }),
-  },
+  ],
 })
 
 const SNAPSHOT = {
@@ -700,27 +704,26 @@ test('ontology-owned objects and links survive a re-index untouched', () => {
 
 test('a model that stops owning a property refuses to load over its edits', () => {
   const db = new Database(':memory:')
-  const widget = (owned: boolean) =>
-    defineOntology({
+  const widget = (owned: boolean) => {
+    const Widget = defineObject('Widget', {
+      primaryKey: 'id',
+      properties: { id: z.string(), note: z.string() },
+      ...(owned ? { owned: { note: '' } } : {}),
+    })
+    return defineOntology({
       name: 'w',
-      objects: {
-        Widget: defineObject({
-          primaryKey: 'id',
-          properties: { id: z.string(), note: z.string() },
-          ...(owned ? { owned: { note: '' } } : {}),
-        }),
-      },
-      links: {},
-      actions: {
-        setNote: defineAction({
-          object: 'Widget',
+      objects: [Widget],
+      actions: [
+        defineAction('setNote', {
+          object: Widget,
           targetParam: 'id',
           params: { id: z.string(), note: z.string() },
           preconditions: [],
-          effects: ({ object, params }) => [modify('Widget', object.id as string, { note: params.note })],
+          effects: ({ object, params }) => [modify(Widget, object.id, { note: params.note })],
         }),
-      },
+      ],
     })
+  }
   const v1 = createRuntime(widget(true), db)
   v1.load({ objects: { Widget: [{ id: 'W1' }] } })
   assert.equal(v1.execute('setNote', { id: 'W1', note: 'keep me' }, { actor: 'test' }).ok, true)
@@ -750,22 +753,20 @@ test('an action can create an ontology-owned object and wire it, atomically', ()
 
 test('every stored row must be plain JSON — whichever door it came through', () => {
   // Through an action: an ontology-owned type whose schema emits a Date.
+  const Job = defineObject('Job', { primaryKey: 'id', properties: { id: z.string() } })
+  const Stamp = defineObject('Stamp', { primaryKey: 'id', owned: true, properties: { id: z.string(), at: z.date() } })
   const clocks = defineOntology({
     name: 'clocks',
-    objects: {
-      Job: defineObject({ primaryKey: 'id', properties: { id: z.string() } }),
-      Stamp: defineObject({ primaryKey: 'id', owned: true, properties: { id: z.string(), at: z.date() } }),
-    },
-    links: {},
-    actions: {
-      mark: defineAction({
-        object: 'Job',
+    objects: [Job, Stamp],
+    actions: [
+      defineAction('mark', {
+        object: Job,
         targetParam: 'jobId',
         params: { jobId: z.string(), id: z.string() },
         preconditions: [],
-        effects: ({ params }) => [create('Stamp', params.id as string, { id: params.id, at: new Date(0) })],
+        effects: ({ params }) => [create(Stamp, params.id, { id: params.id, at: new Date(0) })],
       }),
-    },
+    ],
   })
   const rt = createRuntime(clocks, new Database(':memory:'))
   rt.load({ objects: { Job: [{ id: 'J1' }] } })
@@ -778,11 +779,7 @@ test('every stored row must be plain JSON — whichever door it came through', (
   // Through the pipeline: a source-backed schema that coerces into a Date.
   const feeds = defineOntology({
     name: 'feeds',
-    objects: {
-      Event: defineObject({ primaryKey: 'id', properties: { id: z.string(), at: z.coerce.date() } }),
-    },
-    links: {},
-    actions: {},
+    objects: [defineObject('Event', { primaryKey: 'id', properties: { id: z.string(), at: z.coerce.date() } })],
   })
   const rt2 = createRuntime(feeds, new Database(':memory:'))
   assert.throws(() => rt2.load({ objects: { Event: [{ id: 'E1', at: '2020-01-01' }] } }), /plain JSON/)
@@ -793,7 +790,7 @@ test('an owned default that is not plain JSON is refused at definition', () => {
   // something else entirely.
   assert.throws(
     () =>
-      defineObject({
+      defineObject('Clock', {
         primaryKey: 'id',
         properties: { id: z.string(), at: z.date() },
         owned: { at: new Date(0) },
@@ -810,7 +807,7 @@ test('a hole and a named property cannot cancel out in an array', () => {
   compensated.meta = true
   assert.throws(
     () =>
-      defineObject({
+      defineObject('Bag', {
         primaryKey: 'id',
         properties: { id: z.string(), bag: z.any() },
         owned: { bag: compensated },
@@ -843,27 +840,25 @@ test('execute() and load() refuse to run inside a caller-owned transaction', () 
 })
 
 test('prune compares structurally — key order cannot hide "back at default"', () => {
+  const Widget = defineObject('Widget', {
+    primaryKey: 'id',
+    properties: { id: z.string(), flags: z.object({ a: z.boolean(), b: z.boolean() }) },
+    owned: { flags: { b: false, a: true } }, // declared in one key order…
+  })
   const mini = defineOntology({
     name: 'mini',
-    objects: {
-      Widget: defineObject({
-        primaryKey: 'id',
-        properties: { id: z.string(), flags: z.object({ a: z.boolean(), b: z.boolean() }) },
-        owned: { flags: { b: false, a: true } }, // declared in one key order…
-      }),
-    },
-    links: {},
-    actions: {
-      setFlags: defineAction({
-        object: 'Widget',
+    objects: [Widget],
+    actions: [
+      defineAction('setFlags', {
+        object: Widget,
         targetParam: 'id',
         params: { id: z.string(), a: z.boolean(), b: z.boolean() },
         preconditions: [],
         effects: ({ object, params }) => [
-          modify('Widget', object.id as string, { flags: { a: params.a, b: params.b } }), // …edited in another
+          modify(Widget, object.id, { flags: { a: params.a, b: params.b } }), // …edited in another
         ],
       }),
-    },
+    ],
   })
   const rt = createRuntime(mini, new Database(':memory:'))
   rt.load({ objects: { Widget: [{ id: 'W1' }] } })
@@ -1038,46 +1033,45 @@ test('aggregation is immune to prototype-named groups', () => {
 
 // ─── Declared · visibility: fail-open, attached to the model ───
 
+const Doc = defineObject('Doc', {
+  primaryKey: 'id',
+  properties: { id: z.string(), owner: z.string(), title: z.string() },
+  owned: { title: 'untitled' },
+  visibility: ({ object, actor }) => actor === object.owner || actor === 'user:auditor',
+})
+const Comment = defineObject('Comment', {
+  primaryKey: 'id',
+  properties: { id: z.string(), docId: z.string(), text: z.string() },
+})
+const Trap = defineObject('Trap', {
+  primaryKey: 'id',
+  properties: { id: z.string() },
+  visibility: () => {
+    throw new Error('visibility crashed')
+  },
+})
+const docComments = defineLink('docComments', { from: Doc, to: Comment, kind: 'one-to-many' })
+
 const visOntology = defineOntology({
   name: 'vis',
-  objects: {
-    Doc: defineObject({
-      primaryKey: 'id',
-      properties: { id: z.string(), owner: z.string(), title: z.string() },
-      owned: { title: 'untitled' },
-      visibility: ({ object, actor }) => actor === object.owner || actor === 'user:auditor',
-    }),
-    Comment: defineObject({
-      primaryKey: 'id',
-      properties: { id: z.string(), docId: z.string(), text: z.string() },
-    }),
-    Trap: defineObject({
-      primaryKey: 'id',
-      properties: { id: z.string() },
-      visibility: () => {
-        throw new Error('visibility crashed')
-      },
-    }),
-  },
-  links: {
-    docComments: defineLink({ from: 'Doc', to: 'Comment', kind: 'one-to-many' }),
-  },
-  actions: {
-    renameDoc: defineAction({
-      object: 'Doc',
+  objects: [Doc, Comment, Trap],
+  links: [docComments],
+  actions: [
+    defineAction('renameDoc', {
+      object: Doc,
       targetParam: 'docId',
       params: { docId: z.string(), title: z.string().min(1) },
       preconditions: [],
-      effects: ({ object, params }) => [modify('Doc', object.id as string, { title: params.title })],
+      effects: ({ object, params }) => [modify(Doc, object.id, { title: params.title })],
     }),
-    springTrap: defineAction({
-      object: 'Trap',
+    defineAction('springTrap', {
+      object: Trap,
       targetParam: 'trapId',
       params: { trapId: z.string() },
       preconditions: [],
       effects: () => [],
     }),
-  },
+  ],
 })
 
 function visSetup() {
