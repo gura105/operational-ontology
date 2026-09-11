@@ -115,9 +115,9 @@ function isPlainJson(value: unknown): boolean {
   }
 }
 
-export interface LinkTypeDef {
-  from: string
-  to: string
+export interface LinkTypeDef<From extends string = string, To extends string = string> {
+  from: From
+  to: To
   /**
    * Cardinality is a model constraint, so it is enforced at the write gate:
    * for one-to-many, the "many" side belongs to at most one "one" side.
@@ -136,7 +136,9 @@ export interface LinkTypeDef {
   description?: string
 }
 
-export function defineLink(def: LinkTypeDef): LinkTypeDef {
+export function defineLink<From extends string, To extends string>(
+  def: LinkTypeDef<From, To>,
+): LinkTypeDef<From, To> {
   return def
 }
 
@@ -230,11 +232,14 @@ export function defineAction<S extends Properties>(def: ActionDef<S>): ActionDef
 export interface OntologyDef {
   name: string
   objects: Record<string, ObjectTypeDef<any>>
-  links: Record<string, LinkTypeDef>
+  // `any` ends, not `string`: as the contextual type of a definition literal,
+  // `LinkTypeDef<string, string>` would widen the literal names a nested
+  // defineLink() call inferred — and the model-derived types below need them.
+  links: Record<string, LinkTypeDef<any, any>>
   actions: Record<string, ActionDef<any>>
 }
 
-export function defineOntology(def: OntologyDef): OntologyDef {
+export function defineOntology<T extends OntologyDef>(def: T): T {
   for (const [name, link] of Object.entries(def.links)) {
     for (const end of [link.from, link.to]) {
       if (!Object.hasOwn(def.objects, end)) {
@@ -249,6 +254,48 @@ export function defineOntology(def: OntologyDef): OntologyDef {
   }
   return def
 }
+
+// ───────────────────────────── Model-derived types ─────────────────────────────
+//
+// The runtime's call sites are typed by the definition they were built from:
+// object, link, and action names are the keys of the model, an object's
+// instance shape is what its property schema produces, and an action's
+// params are its parameter schema. A runtime built from a definition typed
+// only as `OntologyDef` falls back to strings and open records — the same
+// contract as before, just untyped.
+
+export type ObjectName<T extends OntologyDef> = keyof T['objects'] & string
+export type LinkName<T extends OntologyDef> = keyof T['links'] & string
+export type ActionName<T extends OntologyDef> = keyof T['actions'] & string
+export type Direction = 'forward' | 'reverse'
+
+/** `any` is the untyped fallback's marker: whatever it names, we know nothing about. */
+type IsAny<X> = 0 extends 1 & X ? true : false
+
+/** The instance shape of object type `K`, as its property schema produces it. */
+export type ObjectOf<T extends OntologyDef, K> =
+  IsAny<K> extends true
+    ? Record<string, unknown>
+    : K extends ObjectName<T>
+      ? T['objects'][K] extends ObjectTypeDef<infer S>
+        ? IsAny<S> extends true
+          ? Record<string, unknown>
+          : z.infer<z.ZodObject<S>>
+        : Record<string, unknown>
+      : Record<string, unknown>
+
+/** The object type a traversal of link `L` arrives at, in direction `D`. */
+export type LinkEnd<T extends OntologyDef, L extends LinkName<T>, D extends Direction> = D extends 'reverse'
+  ? T['links'][L]['from']
+  : T['links'][L]['to']
+
+/** What a caller passes to action `A` — its parameter schema's input side. */
+export type ParamsOf<T extends OntologyDef, A extends ActionName<T>> =
+  T['actions'][A] extends ActionDef<infer S>
+    ? IsAny<S> extends true
+      ? Record<string, unknown>
+      : z.input<z.ZodObject<S>>
+    : Record<string, unknown>
 
 // ───────────────────────────── Write-back ─────────────────────────────
 
@@ -330,14 +377,14 @@ export const declarations = {
  * could stay virtual; a layer that accepts writes has to own state
  * (edits exist here before, or instead of, the systems of record).
  */
-export class Runtime {
-  readonly ontology: OntologyDef
+export class Runtime<T extends OntologyDef = OntologyDef> {
+  readonly ontology: T
   readonly declarations = declarations
   readonly #db: Database
   readonly #writeback?: WritebackAdapter
   readonly #schemas = new Map<string, z.ZodObject<Properties>>()
 
-  constructor(ontology: OntologyDef, db: Database, opts: { writeback?: WritebackAdapter } = {}) {
+  constructor(ontology: T, db: Database, opts: { writeback?: WritebackAdapter } = {}) {
     this.ontology = ontology
     this.#db = db
     this.#writeback = opts.writeback
@@ -383,14 +430,15 @@ export class Runtime {
    * "Re-indexing vs edits" in IMPLEMENTATION.md.
    */
   load(snapshot: {
-    objects?: Record<string, Record<string, unknown>[]>
-    links?: Record<string, Array<[from: string, to: string]>>
+    objects?: { [K in ObjectName<T>]?: Record<string, unknown>[] }
+    links?: { [L in LinkName<T>]?: Array<[from: string, to: string]> }
   }): void {
     this.#refuseOpenTransaction('load')
     const insertObject = this.#db.prepare('INSERT INTO objects (type, pk, data) VALUES (?, ?, ?)')
     const insertLink = this.#db.prepare('INSERT OR REPLACE INTO links (name, from_pk, to_pk) VALUES (?, ?, ?)')
     this.#db.transaction(() => {
-      for (const [type, rows] of Object.entries(snapshot.objects ?? {})) {
+      const objectEntries = Object.entries(snapshot.objects ?? {}) as Array<[string, Record<string, unknown>[]]>
+      for (const [type, rows] of objectEntries) {
         const def = this.ontology.objects[type]
         const schema = this.#schemas.get(type)
         if (!def || !schema) throw new Error(`unknown object type "${type}"`)
@@ -421,7 +469,8 @@ export class Runtime {
         }
         this.#reapplyOverlay(type)
       }
-      for (const [name, pairs] of Object.entries(snapshot.links ?? {})) {
+      const linkEntries = Object.entries(snapshot.links ?? {}) as Array<[string, Array<[string, string]>]>
+      for (const [name, pairs] of linkEntries) {
         const link = Object.hasOwn(this.ontology.links, name) ? this.ontology.links[name] : undefined
         if (!link) throw new Error(`unknown link type "${name}"`)
         if (link.owned) {
@@ -474,34 +523,27 @@ export class Runtime {
 
   // ── Read side: query the model, not the tables — and always as someone ──
 
-  get<O = Record<string, unknown>>(type: string, pk: string, opts: { actor: string }): O | undefined {
-    const object = this.#fetch<O>(type, pk)
-    if (object === undefined) return undefined
-    // A hidden object is indistinguishable from a nonexistent one.
-    return this.#visible(type, object as Record<string, unknown>, opts.actor) ? object : undefined
+  get<K extends ObjectName<T>>(type: K, pk: string, opts: { actor: string }): ObjectOf<T, K> | undefined {
+    return this.#read<ObjectOf<T, K>>(type, pk, opts.actor)
   }
 
-  search<O = Record<string, unknown>>(
-    type: string,
-    opts: { actor: string; filter?: Partial<O> | ((o: O) => boolean) },
-  ): O[] {
-    this.#objectDef(type)
-    const rows = this.#db.prepare('SELECT data FROM objects WHERE type = ? ORDER BY pk').all(type) as {
-      data: string
-    }[]
-    return rows
-      .map((r) => JSON.parse(r.data) as O)
-      .filter((o) => this.#visible(type, o as Record<string, unknown>, opts.actor))
-      .filter(matcher(opts.filter))
+  search<K extends ObjectName<T>>(
+    type: K,
+    opts: { actor: string; filter?: Partial<ObjectOf<T, K>> | ((o: ObjectOf<T, K>) => boolean) },
+  ): ObjectOf<T, K>[] {
+    return this.#scan<ObjectOf<T, K>>(type, opts.actor, opts.filter)
   }
 
   /** Follow a link from one object to its neighbours. Both directions are traversable. */
-  traverse<O = Record<string, unknown>>(
-    linkName: string,
+  traverse<L extends LinkName<T>, D extends Direction = 'forward'>(
+    linkName: L,
     pk: string,
-    opts: { actor: string; direction?: 'forward' | 'reverse' },
-  ): O[] {
-    const link = Object.hasOwn(this.ontology.links, linkName) ? this.ontology.links[linkName] : undefined
+    opts: { actor: string; direction?: D },
+  ): ObjectOf<T, LinkEnd<T, L, D>>[] {
+    type Target = ObjectOf<T, LinkEnd<T, L, D>>
+    const link: LinkTypeDef | undefined = Object.hasOwn(this.ontology.links, linkName)
+      ? this.ontology.links[linkName]
+      : undefined
     if (!link) throw new Error(`unknown link type "${linkName}"`)
     const [where, select, targetType, originType] =
       (opts.direction ?? 'forward') === 'forward'
@@ -509,24 +551,24 @@ export class Runtime {
         : ['to_pk', 'from_pk', link.from, link.to]
     // A hidden origin leaks nothing: traversal from an object the actor
     // cannot see behaves exactly like traversal from a missing one.
-    if (!this.get(originType, pk, { actor: opts.actor })) return []
+    if (!this.#read(originType, pk, opts.actor)) return []
     const rows = this.#db
       .prepare(`SELECT ${select} AS pk FROM links WHERE name = ? AND ${where} = ? ORDER BY pk`)
       .all(linkName, pk) as { pk: string }[]
     return rows
-      .map((r) => this.get<O>(targetType, r.pk, { actor: opts.actor }))
-      .filter((o): o is O => o !== undefined)
+      .map((r) => this.#read<Target>(targetType, r.pk, opts.actor))
+      .filter((o): o is Target => o !== undefined)
   }
 
   /** Query-time aggregation over the indexed objects. Nothing is precomputed. */
-  aggregate<O = Record<string, unknown>>(
-    type: string,
-    opts: { actor: string } & AggregateOptions<O>,
+  aggregate<K extends ObjectName<T>>(
+    type: K,
+    opts: { actor: string } & AggregateOptions<ObjectOf<T, K>>,
   ): Record<string, { count: number; sum?: number }> {
     // Accumulate in a Map: group keys are data, and data named "__proto__"
     // must not walk — let alone pollute — the prototype chain.
     const out = new Map<string, { count: number; sum?: number }>()
-    for (const obj of this.search<O>(type, { actor: opts.actor, filter: opts.filter })) {
+    for (const obj of this.#scan<ObjectOf<T, K>>(type, opts.actor, opts.filter)) {
       const key = opts.groupBy(obj)
       let bucket = out.get(key)
       if (!bucket) {
@@ -549,8 +591,10 @@ export class Runtime {
    * audit entry. Validity precedes authority: a plan the store would refuse
    * is INVALID_EDITS, whatever else it is.
    */
-  execute(actionName: string, params: Record<string, unknown>, opts: { actor: string }): ActionResult {
+  execute<A extends ActionName<T>>(actionName: A, params: ParamsOf<T, A>, opts: { actor: string }): ActionResult {
     this.#refuseOpenTransaction('execute')
+    // From here on the params are raw input: the schema, not the type, decides.
+    const raw = params as Record<string, unknown>
     // Every attempt is audited — including the ones that never reach the model.
     const refuseAs = (
       target: string,
@@ -570,31 +614,31 @@ export class Runtime {
       return { ok: false, error }
     }
 
-    const action = Object.hasOwn(this.ontology.actions, actionName)
+    const action: ActionDef | undefined = Object.hasOwn(this.ontology.actions, actionName)
       ? this.ontology.actions[actionName]
       : undefined
     if (!action) {
-      return refuseAs('(unknown action)', params, reject('UNKNOWN_ACTION', `no action named "${actionName}"`))
+      return refuseAs('(unknown action)', raw, reject('UNKNOWN_ACTION', `no action named "${actionName}"`))
     }
 
     const guessTarget = () => {
-      const guessed = params[action.targetParam]
+      const guessed = raw[action.targetParam]
       return `${action.object}/${guessed != null ? String(guessed) : '(invalid)'}`
     }
 
     // Params are stored verbatim in the audit log, so they must be values
     // the log can hold faithfully — refused here, and still audited (the
     // audit write falls back to a placeholder for what it cannot encode).
-    if (!isPlainJson(params)) {
-      return refuseAs(guessTarget(), params, reject('INVALID_PARAMS', 'params are not plain JSON data'))
+    if (!isPlainJson(raw)) {
+      return refuseAs(guessTarget(), raw, reject('INVALID_PARAMS', 'params are not plain JSON data'))
     }
 
-    const parsed = z.object(action.params).safeParse(params)
+    const parsed = z.object(action.params).safeParse(raw)
     if (!parsed.success) {
       const issue = parsed.error.issues[0]
       return refuseAs(
         guessTarget(),
-        params,
+        raw,
         reject('INVALID_PARAMS', `${issue?.path.join('.') ?? 'params'}: ${issue?.message ?? 'invalid'}`),
       )
     }
@@ -743,7 +787,7 @@ export class Runtime {
     return { ok: true, edits }
   }
 
-  auditLog(filter: { action?: string; status?: 'applied' | 'rejected'; target?: string } = {}): AuditEntry[] {
+  auditLog(filter: { action?: ActionName<T>; status?: 'applied' | 'rejected'; target?: string } = {}): AuditEntry[] {
     const rows = this.#db.prepare('SELECT * FROM audit_log ORDER BY seq').all() as Array<{
       seq: number
       ts: string
@@ -852,6 +896,25 @@ export class Runtime {
       throw new Error(`${type} row is not plain JSON data — the store cannot hold it faithfully`)
     }
     return JSON.stringify(value)
+  }
+
+  /** One object, as the actor sees it: a hidden object is indistinguishable from a nonexistent one. */
+  #read<O = Record<string, unknown>>(type: string, pk: string, actor: string): O | undefined {
+    const object = this.#fetch<O>(type, pk)
+    if (object === undefined) return undefined
+    return this.#visible(type, object as Record<string, unknown>, actor) ? object : undefined
+  }
+
+  /** Every object of a type the actor can see, in pk order, optionally filtered. */
+  #scan<O = Record<string, unknown>>(type: string, actor: string, filter?: Partial<O> | ((o: O) => boolean)): O[] {
+    this.#objectDef(type)
+    const rows = this.#db.prepare('SELECT data FROM objects WHERE type = ? ORDER BY pk').all(type) as {
+      data: string
+    }[]
+    return rows
+      .map((r) => JSON.parse(r.data) as O)
+      .filter((o) => this.#visible(type, o as Record<string, unknown>, actor))
+      .filter(matcher(filter))
   }
 
   /** Raw fetch without visibility — for internal integrity checks only. */
@@ -1032,11 +1095,11 @@ function safeJson(value: unknown): string {
   return JSON.stringify({ $unserializable: String(value) })
 }
 
-export function createRuntime(
-  ontology: OntologyDef,
+export function createRuntime<T extends OntologyDef>(
+  ontology: T,
   db: Database,
   opts: { writeback?: WritebackAdapter } = {},
-): Runtime {
+): Runtime<T> {
   return new Runtime(ontology, db, opts)
 }
 

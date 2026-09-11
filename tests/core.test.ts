@@ -330,7 +330,7 @@ test('a business rule refuses the write with a machine-readable error', () => {
   const result = rt.execute('cancelOrder', { orderId: 'O1', reason: 'changed mind' }, { actor: 'test' })
   assert.equal(result.ok, false)
   if (!result.ok) assert.equal(result.error.code, 'SHIPPED_ORDER_CANNOT_BE_CANCELLED')
-  assert.equal(rt.get<{ status: string }>('Order', 'O1', asTest)!.status, 'shipped') // unchanged
+  assert.equal(rt.get('Order', 'O1', asTest)!.status, 'shipped') // unchanged
 })
 
 test('rejected attempts are recorded in the audit log', () => {
@@ -345,7 +345,7 @@ test('an allowed action applies its edits and audits them atomically', () => {
   const rt = setup()
   const result = rt.execute('cancelOrder', { orderId: 'O2', reason: 'duplicate' }, { actor: 'test' })
   assert.equal(result.ok, true)
-  assert.equal(rt.get<{ status: string }>('Order', 'O2', asTest)!.status, 'cancelled')
+  assert.equal(rt.get('Order', 'O2', asTest)!.status, 'cancelled')
   const applied = rt.auditLog({ status: 'applied' })
   assert.equal(applied.length, 1)
   assert.deepEqual(applied[0].edits, [{ op: 'modify', object: 'Order', pk: 'O2', changes: { status: 'cancelled' } }])
@@ -367,6 +367,10 @@ test('a missing target is refused', () => {
 
 test('an unknown action is refused', () => {
   const rt = setup()
+  // The model types the call site too, so an unknown name is a compile
+  // error first; the runtime refusal under test is the one a caller that
+  // bypassed the types (an agent, a REST client) would meet.
+  // @ts-expect-error unknown action name
   const result = rt.execute('dropAllTables', {}, { actor: 'test' })
   assert.equal(result.ok, false)
   if (!result.ok) assert.equal(result.error.code, 'UNKNOWN_ACTION')
@@ -374,6 +378,7 @@ test('an unknown action is refused', () => {
 
 test('attempts that never reach the model are audited too', () => {
   const rt = setup()
+  // @ts-expect-error unknown action name
   rt.execute('dropAllTables', {}, { actor: 'test' })
   rt.execute('cancelOrder', { orderId: 'O2', reason: '' }, { actor: 'test' })
   const rejected = rt.auditLog({ status: 'rejected' })
@@ -386,17 +391,19 @@ test('params the audit log cannot hold are refused — and still audited', () =>
   const rt = setup()
   // A BigInt survives no JSON round trip: the params are refused before the
   // model runs, and the audit write records a placeholder instead of crashing.
+  // @ts-expect-error a BigInt is not a string — the type says so; the runtime must too
   const result = rt.execute('cancelOrder', { orderId: 'O2', reason: 10n }, { actor: 'test' })
   assert.equal(result.ok, false)
   if (!result.ok) assert.equal(result.error.code, 'INVALID_PARAMS')
   // The same holds on the path that never finds an action.
+  // @ts-expect-error unknown action name
   const unknown = rt.execute('dropAllTables', { n: 10n }, { actor: 'test' })
   assert.equal(unknown.ok, false)
   if (!unknown.ok) assert.equal(unknown.error.code, 'UNKNOWN_ACTION')
   const rejected = rt.auditLog({ status: 'rejected' })
   assert.deepEqual(rejected.map((e) => e.error?.code), ['INVALID_PARAMS', 'UNKNOWN_ACTION'])
   assert.deepEqual(rejected[0].params, { $unserializable: '[object Object]' })
-  assert.equal(rt.get<{ status: string }>('Order', 'O2', asTest)!.status, 'pending')
+  assert.equal(rt.get('Order', 'O2', asTest)!.status, 'pending')
 })
 
 // ─── Property 4 · write-back and its declared failure semantics ───
@@ -414,7 +421,7 @@ test('write-back-first ordering: adapter failure blocks the ontology edit', () =
   assert.equal(result.ok, false)
   if (!result.ok) assert.equal(result.error.code, 'WRITEBACK_FAILED')
   assert.deepEqual(calls, ['adapter']) // adapter ran…
-  assert.equal(rt.get<{ status: string }>('Order', 'O2', asTest)!.status, 'pending') // …but nothing changed here
+  assert.equal(rt.get('Order', 'O2', asTest)!.status, 'pending') // …but nothing changed here
   assert.equal(rt.auditLog({ status: 'applied' }).length, 0)
   // The plan that already left for the source is on the record — the
   // adapter may have partially applied it before throwing.
@@ -429,7 +436,7 @@ test('an action that requires write-back refuses without an adapter', () => {
   const result = rt.execute('cancelOrder', { orderId: 'O2', reason: 'duplicate' }, { actor: 'test' })
   assert.equal(result.ok, false)
   if (!result.ok) assert.equal(result.error.code, 'NO_WRITEBACK_ADAPTER')
-  assert.equal(rt.get<{ status: string }>('Order', 'O2', asTest)!.status, 'pending')
+  assert.equal(rt.get('Order', 'O2', asTest)!.status, 'pending')
   assert.equal(rt.auditLog({ status: 'rejected' })[0]?.error?.code, 'NO_WRITEBACK_ADAPTER')
 })
 
@@ -479,7 +486,7 @@ test('invalid edits are refused before the adapter ever runs', () => {
   }
 
   assert.deepEqual(calls, []) // the write-back adapter never saw a bad plan
-  assert.equal(rt.get<{ status: string }>('Order', 'O2', asTest)!.status, 'pending')
+  assert.equal(rt.get('Order', 'O2', asTest)!.status, 'pending')
   assert.equal(rt.auditLog({ status: 'rejected' }).length, 4)
 })
 
@@ -502,7 +509,7 @@ test('the preflight is the single gate: store-level violations are refused befor
   assert.deepEqual(calls, []) // the plan never reached the system of record
   // The dry run left no trace: the unlink that "ran" before the failing
   // link is rolled back with everything else.
-  assert.deepEqual(rt.traverse<{ id: string }>('customerOrders', 'C1', asTest).map((o) => o.id), ['O1', 'O2'])
+  assert.deepEqual(rt.traverse('customerOrders', 'C1', asTest).map((o) => o.id), ['O1', 'O2'])
   assert.equal(rt.auditLog({ status: 'applied' }).length, 0)
 })
 
@@ -518,7 +525,7 @@ test('one-to-many cardinality is enforced at the write gate, before write-back',
     assert.match(result.error.message, /one-to-many/)
   }
   assert.deepEqual(calls, [])
-  assert.deepEqual(rt.traverse<{ id: string }>('customerOrders', 'O2', { ...asTest, direction: 'reverse' }).map((c) => c.id), ['C1'])
+  assert.deepEqual(rt.traverse('customerOrders', 'O2', { ...asTest, direction: 'reverse' }).map((c) => c.id), ['C1'])
   assert.equal(rt.auditLog({ status: 'applied' }).length, 0)
 })
 
@@ -566,8 +573,8 @@ test('the committed plan is the validated plan — an adapter cannot mutate it',
   const result = rt.execute('cancelOrder', { orderId: 'O2', reason: 'duplicate' }, { actor: 'test' })
   assert.equal(result.ok, true)
   // The adapter mutated its own copy; the validated plan is what committed.
-  assert.equal(rt.get<{ status: string }>('Order', 'O2', asTest)!.status, 'cancelled')
-  assert.equal(rt.get<{ status: string }>('Order', 'O1', asTest)!.status, 'shipped')
+  assert.equal(rt.get('Order', 'O2', asTest)!.status, 'cancelled')
+  assert.equal(rt.get('Order', 'O1', asTest)!.status, 'shipped')
   assert.deepEqual(rt.auditLog({ status: 'applied' })[0]?.edits, [
     { op: 'modify', object: 'Order', pk: 'O2', changes: { status: 'cancelled' } },
   ])
@@ -580,7 +587,7 @@ test('an undeclared write to source-backed state is refused as a shadow copy', (
   const result = rt.execute('sneakyCancel', { orderId: 'O2' }, { actor: 'test' })
   assert.equal(result.ok, false)
   if (!result.ok) assert.equal(result.error.code, 'UNDECLARED_SOURCE_WRITE')
-  assert.equal(rt.get<{ status: string }>('Order', 'O2', asTest)!.status, 'pending')
+  assert.equal(rt.get('Order', 'O2', asTest)!.status, 'pending')
 })
 
 test('a declared write-back with nothing source-backed in the plan is refused', () => {
@@ -632,7 +639,7 @@ test('ontology-owned state survives a re-index; source-backed state refreshes', 
   const moved = structuredClone(SNAPSHOT)
   moved.objects.Order[1] = { id: 'O2', status: 'shipped', total: 200 }
   rt.load(moved)
-  const o2 = rt.get<{ status: string; assignee: string | null }>('Order', 'O2', asTest)!
+  const o2 = rt.get('Order', 'O2', asTest)!
   assert.equal(o2.status, 'shipped') // the source spoke, the base refreshed
   assert.equal(o2.assignee, 'alice') // the ontology's own state survived
 })
@@ -660,7 +667,7 @@ test('a re-index that would drop surviving ontology-owned state is refused whole
   }
   assert.throws(() => rt.load(gone), /re-index conflict/)
   // Rolled back whole: the old base, the edit, everything still stands.
-  const o2 = rt.get<{ assignee: string | null }>('Order', 'O2', asTest)!
+  const o2 = rt.get('Order', 'O2', asTest)!
   assert.equal(o2.assignee, 'alice')
 })
 
@@ -687,8 +694,8 @@ test('ontology-owned objects and links survive a re-index untouched', () => {
   const rt = setup()
   rt.execute('openTask', { orderId: 'O2', taskId: 'T1', title: 'call the customer' }, { actor: 'test' })
   rt.load(SNAPSHOT) // full re-index of everything a source supplies
-  assert.equal(rt.get<{ title: string }>('Task', 'T1', asTest)!.title, 'call the customer')
-  assert.deepEqual(rt.traverse<{ id: string }>('orderTasks', 'O2', asTest).map((t) => t.id), ['T1'])
+  assert.equal(rt.get('Task', 'T1', asTest)!.title, 'call the customer')
+  assert.deepEqual(rt.traverse('orderTasks', 'O2', asTest).map((t) => t.id), ['T1'])
 })
 
 test('a model that stops owning a property refuses to load over its edits', () => {
@@ -730,8 +737,8 @@ test('an action can create an ontology-owned object and wire it, atomically', ()
   const rt = setup()
   const result = rt.execute('openTask', { orderId: 'O2', taskId: 'T1', title: 'triage the backlog' }, { actor: 'test' })
   assert.equal(result.ok, true)
-  assert.equal(rt.get<{ title: string }>('Task', 'T1', asTest)!.title, 'triage the backlog')
-  assert.deepEqual(rt.traverse<{ id: string }>('orderTasks', 'O2', asTest).map((t) => t.id), ['T1'])
+  assert.equal(rt.get('Task', 'T1', asTest)!.title, 'triage the backlog')
+  assert.deepEqual(rt.traverse('orderTasks', 'O2', asTest).map((t) => t.id), ['T1'])
   assert.equal(rt.auditLog({ status: 'applied' })[0]?.target, 'Order/O2')
   // A second creation with the same pk collides in the store.
   const dup = rt.execute('openTask', { orderId: 'O2', taskId: 'T1', title: 'again' }, { actor: 'test' })
@@ -832,7 +839,7 @@ test('execute() and load() refuse to run inside a caller-owned transaction', () 
   )
   assert.throws(() => db.transaction(() => rt.load(SNAPSHOT))(), /open transaction/)
   // Nothing leaked out of the refused attempts.
-  assert.equal(rt.get<{ assignee: string | null }>('Order', 'O2', { actor: 'test' })!.assignee, null)
+  assert.equal(rt.get('Order', 'O2', { actor: 'test' })!.assignee, null)
 })
 
 test('prune compares structurally — key order cannot hide "back at default"', () => {
@@ -875,18 +882,18 @@ test('actions can rewire the graph itself — links are edits too', () => {
     { actor: 'test' },
   )
   assert.equal(result.ok, true)
-  assert.deepEqual(rt.traverse<{ id: string }>('customerOrders', 'C1', asTest).map((o) => o.id), ['O1'])
-  assert.deepEqual(rt.traverse<{ id: string }>('customerOrders', 'C2', asTest).map((o) => o.id), ['O2'])
+  assert.deepEqual(rt.traverse('customerOrders', 'C1', asTest).map((o) => o.id), ['O1'])
+  assert.deepEqual(rt.traverse('customerOrders', 'C2', asTest).map((o) => o.id), ['O2'])
 })
 
 test('links traverse in both directions', () => {
   const rt = setup()
   assert.deepEqual(
-    rt.traverse<{ id: string }>('customerOrders', 'C1', asTest).map((o) => o.id),
+    rt.traverse('customerOrders', 'C1', asTest).map((o) => o.id),
     ['O1', 'O2'],
   )
   assert.deepEqual(
-    rt.traverse<{ id: string }>('customerOrders', 'O2', { ...asTest, direction: 'reverse' }).map((c) => c.id),
+    rt.traverse('customerOrders', 'O2', { ...asTest, direction: 'reverse' }).map((c) => c.id),
     ['C1'],
   )
 })
@@ -914,10 +921,13 @@ test('the primary key cannot be modified', () => {
 
 test('prototype names are not actions, objects, or links', () => {
   const rt = setup()
+  // @ts-expect-error not an action name
   const result = rt.execute('toString', {}, { actor: 'test' })
   assert.equal(result.ok, false)
   if (!result.ok) assert.equal(result.error.code, 'UNKNOWN_ACTION')
+  // @ts-expect-error not an object type name
   assert.throws(() => rt.get('toString', 'x', asTest), /unknown object type/)
+  // @ts-expect-error not a link type name
   assert.throws(() => rt.traverse('toString', 'x', asTest), /unknown link type/)
   // …and not link types inside an edit plan either — refused before the
   // adapter could ever see the plan.
@@ -954,7 +964,7 @@ test('re-loading resets source-backed links instead of merging', () => {
   rt.load(SNAPSHOT)
   // The local echo of the reassignment is gone; the snapshot's view is back.
   assert.deepEqual(
-    rt.traverse<{ id: string }>('customerOrders', 'O2', { ...asTest, direction: 'reverse' }).map((c) => c.id),
+    rt.traverse('customerOrders', 'O2', { ...asTest, direction: 'reverse' }).map((c) => c.id),
     ['C1'],
   )
 })
@@ -985,7 +995,7 @@ test('a partial re-load that breaks surviving edits is refused whole', () => {
   // Rolled back whole: C2 and the edited link both survive.
   assert.notEqual(rt.get('Customer', 'C2', asTest), undefined)
   assert.deepEqual(
-    rt.traverse<{ id: string }>('customerOrders', 'O2', { ...asTest, direction: 'reverse' }).map((c) => c.id),
+    rt.traverse('customerOrders', 'O2', { ...asTest, direction: 'reverse' }).map((c) => c.id),
     ['C2'],
   )
 })
@@ -1007,7 +1017,7 @@ test('indexing refuses unknown keys instead of silently stripping them', () => {
 
 test('aggregation happens at query time', () => {
   const rt = setup()
-  const byStatus = rt.aggregate<{ status: string; total: number }>('Order', {
+  const byStatus = rt.aggregate('Order', {
     ...asTest,
     groupBy: (o) => o.status,
     sum: (o) => o.total,
@@ -1017,7 +1027,7 @@ test('aggregation happens at query time', () => {
 
 test('aggregation is immune to prototype-named groups', () => {
   const rt = setup()
-  const groups = rt.aggregate<{ id: string }>('Order', {
+  const groups = rt.aggregate('Order', {
     ...asTest,
     groupBy: (o) => (o.id === 'O1' ? '__proto__' : 'toString'),
   })
@@ -1088,8 +1098,8 @@ function visSetup() {
 
 test('visibility lives in the model: the same search returns different worlds', () => {
   const rt = visSetup()
-  assert.deepEqual(rt.search<{ id: string }>('Doc', { actor: 'user:alice' }).map((d) => d.id), ['D1'])
-  assert.deepEqual(rt.search<{ id: string }>('Doc', { actor: 'user:auditor' }).map((d) => d.id), ['D1', 'D2'])
+  assert.deepEqual(rt.search('Doc', { actor: 'user:alice' }).map((d) => d.id), ['D1'])
+  assert.deepEqual(rt.search('Doc', { actor: 'user:auditor' }).map((d) => d.id), ['D1', 'D2'])
 })
 
 test('a crashing visibility predicate is audited as EXECUTION_CRASHED', () => {

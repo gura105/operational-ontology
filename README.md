@@ -235,7 +235,7 @@ Scope is frozen for v0 so the reference implementation stays small enough to rea
 
 **Why not OWL/RDF?** Those model what things *are* (semantic). Half of this pattern is what you can *do* (kinetic): actions, preconditions, audit, write-back. A reasoner cannot cancel an order.
 
-**Why TypeScript definitions instead of YAML?** Because business rules are code, and rule-expression languages embedded in YAML tend to grow into ad-hoc rule engines. TypeScript object literals keep the model enumerable while the rules stay ordinary typed code. (The typing covers the language, not yet the model's own schema — see [Status](#status).) Structure as data, rules as functions — the same split Foundry makes between Ontology Manager and Functions.
+**Why TypeScript definitions instead of YAML?** Because business rules are code, and rule-expression languages embedded in YAML tend to grow into ad-hoc rule engines. TypeScript object literals keep the model enumerable while the rules stay ordinary typed code. (The model types the runtime's call sites — object, link, and action names, instance shapes, action params — but not yet the rule contexts inside actions; see [Status](#status).) Structure as data, rules as functions — the same split Foundry makes between Ontology Manager and Functions.
 
 **What about transactions and rollback?** Three domains, three answers. Dataset versioning and rollback belong to the data layer (in Foundry: catalog transactions and branching). Atomic application of an action's edits belongs to this layer (implemented here as a real SQLite transaction). The consistency mechanism for cross-system write-back is implementation-defined; the pattern requires it to be declared, and this implementation declares write-back-first ordering (see [Failure semantics](#failure-semantics)).
 
@@ -275,7 +275,7 @@ Current limitations, which are also the worklist for the next version:
 - Creation is limited to ontology-owned types; source-backed creation carried by write-back is not demonstrated yet.
 - No deletes.
 - No link properties or composite keys.
-- Rule contexts are not fully typed.
+- Rule contexts are not typed by the model: `ctx.object` and edit payloads are untyped inside actions, while the runtime's call sites are.
 - Nested properties are not validated strictly.
 
 The mechanics behind this implementation's declarations are in the [implementation notes](./IMPLEMENTATION.md). Built and verified with Node 24, better-sqlite3, zod 4, MCP SDK 1.29.

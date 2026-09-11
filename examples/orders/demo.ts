@@ -38,26 +38,26 @@ console.log('declared semantics:', rt.declarations)
 // ── 3. Read side: query the model, not the tables — always as someone ───
 h('3. Read: traverse links, aggregate at query time')
 const hq = { actor: 'user:hq' }
-const yamada = rt.get<{ id: string; name: string }>('Customer', 'N-C01', hq)!
+const yamada = rt.get('Customer', 'N-C01', hq)!
 console.log(`orders of ${yamada.name}:`)
-for (const o of rt.traverse<{ id: string; status: string; total: number }>('customerOrders', yamada.id, hq)) {
+for (const o of rt.traverse('customerOrders', yamada.id, hq)) {
   console.log(`  ${o.id}  ${o.status.padEnd(9)} ¥${o.total}`)
 }
 console.log('who ordered Keyboard (reverse traversal):',
-  rt.traverse<{ id: string }>('orderProducts', 'ITM-101', { ...hq, direction: 'reverse' }).map((o) => o.id))
+  rt.traverse('orderProducts', 'ITM-101', { ...hq, direction: 'reverse' }).map((o) => o.id))
 console.log('pending order value by region:',
-  rt.aggregate<{ id: string; status: string; total: number }>('Order', {
+  rt.aggregate('Order', {
     ...hq,
     filter: { status: 'pending' },
     // The customer relationship lives in the link, so the region comes from
     // a reverse traversal — not from a duplicated FK property.
     groupBy: (o) =>
-      rt.traverse<{ region: string }>('customerOrders', o.id, { ...hq, direction: 'reverse' })[0]?.region ?? 'unknown',
+      rt.traverse('customerOrders', o.id, { ...hq, direction: 'reverse' })[0]?.region ?? 'unknown',
     sum: (o) => o.total,
   }))
 console.log('same search, different actors (visibility lives in the model):')
-console.log('  as user:north-sales:', rt.search<{ id: string }>('Order', { actor: 'user:north-sales' }).map((o) => o.id))
-console.log('  as user:hq:         ', rt.search<{ id: string }>('Order', hq).map((o) => o.id))
+console.log('  as user:north-sales:', rt.search('Order', { actor: 'user:north-sales' }).map((o) => o.id))
+console.log('  as user:hq:         ', rt.search('Order', hq).map((o) => o.id))
 
 // ── 4. Write side: every change is an action ────────────────────────────
 h('4. Write: an allowed action')
@@ -80,17 +80,17 @@ h('7. Write: the source refuses a stale write (write-back-first)')
 legacy.south.prepare("UPDATE SALES_ORDER SET ORDER_STATUS = 'SHIPPED' WHERE ORDER_ID = 'SO-79'").run()
 const stale = rt.execute('cancelOrder', { orderId: 'S-SO-79', reason: 'no longer needed' }, { actor: 'user:hq' })
 console.log("the ERP shipped SO-79 behind the ontology's back; cancelOrder(S-SO-79) →", JSON.stringify(stale, null, 2))
-console.log(`status here is still "${rt.get<{ status: string }>('Order', 'S-SO-79', hq)!.status}" — write-back ran first, the source refused, nothing changed locally`)
+console.log(`status here is still "${rt.get('Order', 'S-SO-79', hq)!.status}" — write-back ran first, the source refused, nothing changed locally`)
 
 // ── 8. Re-indexing: the sources move on, the ontology's own state survives ──
 h('8. Re-index: ontology-owned state survives, source truth refreshes')
 rt.execute('addOrderNote', { orderId: 'N-A-1002', noteId: 'NOTE-1', text: 'audit all N- orders before the north system sunsets', author: 'hq-ops' }, { actor: 'user:hq' })
 rt.load(integrate(legacy)) // the pipeline runs again over the live legacy systems
-const reindexed = rt.get<{ assignee: string | null; status: string }>('Order', 'N-A-1002', hq)!
+const reindexed = rt.get('Order', 'N-A-1002', hq)!
 console.log(`assignee of N-A-1002:  ${reindexed.assignee}  ← ontology-owned, survived the re-index`)
-console.log('notes on N-A-1002:    ', rt.traverse<{ text: string }>('orderNotes', 'N-A-1002', hq).map((n) => n.text))
-console.log(`status of S-SO-77:     ${rt.get<{ status: string }>('Order', 'S-SO-77', hq)!.status}  ← source-backed, refreshed from the ERP (where the cancellation held)`)
-console.log(`status of S-SO-79:     ${rt.get<{ status: string }>('Order', 'S-SO-79', hq)!.status}  ← the truth the source defended in step 7, arriving with the re-index`)
+console.log('notes on N-A-1002:    ', rt.traverse('orderNotes', 'N-A-1002', hq).map((n) => n.text))
+console.log(`status of S-SO-77:     ${rt.get('Order', 'S-SO-77', hq)!.status}  ← source-backed, refreshed from the ERP (where the cancellation held)`)
+console.log(`status of S-SO-79:     ${rt.get('Order', 'S-SO-79', hq)!.status}  ← the truth the source defended in step 7, arriving with the re-index`)
 
 // ── 9. Everything is on the record ──────────────────────────────────────
 h('9. Audit log (applied AND rejected attempts)')

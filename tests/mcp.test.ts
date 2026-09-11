@@ -91,7 +91,7 @@ test('the same business rule that gates humans gates the agent', async () => {
   assert.equal(result.isError, true)
   const payload = JSON.parse((result.content as any)[0].text)
   assert.equal(payload.error.code, 'SHIPPED_ORDER_CANNOT_BE_CANCELLED')
-  assert.equal(rt.get<{ status: string }>('Order', 'N-A-1001', { actor: 'user:hq' })!.status, 'shipped')
+  assert.equal(rt.get('Order', 'N-A-1001', { actor: 'user:hq' })!.status, 'shipped')
 })
 
 test('the system of record refuses a stale cancellation (guarded write-back)', async () => {
@@ -105,7 +105,7 @@ test('the system of record refuses a stale cancellation (guarded write-back)', a
   assert.equal(result.isError, true)
   const payload = JSON.parse((result.content as any)[0].text)
   assert.equal(payload.error.code, 'WRITEBACK_FAILED')
-  assert.equal(rt.get<{ status: string }>('Order', 'S-SO-77', { actor: 'user:hq' })!.status, 'pending')
+  assert.equal(rt.get('Order', 'S-SO-77', { actor: 'user:hq' })!.status, 'pending')
 })
 
 test('aggregate rejects property names the model does not define', async () => {
@@ -200,7 +200,7 @@ test('an allowed agent write lands, is audited, and reaches the system of record
     arguments: { orderId: 'S-SO-77', reason: 'duplicate' },
   })
   assert.notEqual(result.isError, true)
-  assert.equal(rt.get<{ status: string }>('Order', 'S-SO-77', { actor: 'user:hq' })!.status, 'cancelled')
+  assert.equal(rt.get('Order', 'S-SO-77', { actor: 'user:hq' })!.status, 'cancelled')
 
   const row = legacy.south
     .prepare("SELECT ORDER_STATUS FROM SALES_ORDER WHERE ORDER_ID = 'SO-77'")
