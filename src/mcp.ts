@@ -17,9 +17,11 @@
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js'
 import { z } from 'zod'
 import type { Runtime } from './core.js'
+import pkg from '../package.json' with { type: 'json' }
 
 export function buildMcpServer(rt: Runtime, opts: { agent?: string } = {}): McpServer {
-  const server = new McpServer({ name: `operational-ontology:${rt.ontology.name}`, version: '0.2.0' })
+  // The version an agent sees is the package's — one place to bump.
+  const server = new McpServer({ name: `operational-ontology:${rt.ontology.name}`, version: pkg.version })
   // Tool names are derived from model names, so two model names can collide
   // after snake-casing (object `Order` ⇒ search_order, action `searchOrder`
   // ⇒ search_order). Fail at build time with both origins named.

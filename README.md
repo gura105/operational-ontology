@@ -267,7 +267,7 @@ Two design choices follow. `preconditions` is a required key, and an empty list 
 
 ## Status
 
-v0.2 — reference implementation. This version removed mechanisms that enforced vows beyond the four properties — canonical-form storage checks, foreign-transaction detection, targetless actions, property-mirrored links, deletes — and replaced them with declared contracts, keeping the runtime readable in one sitting. Nothing in the four properties was lost.
+v0.3 — reference implementation. This version types the runtime's call sites by the model: object, link, and action names complete and check, instance shapes come from the property schemas, `traverse` resolves its result from the link's ends and the direction, and `execute` checks params against the action's parameter schema. A definition typed only as `OntologyDef` keeps the untyped contract. Earlier versions are described in the [release notes](https://github.com/gura105/operational-ontology/releases); v0.2 subtracted the mechanisms that enforced vows beyond the four properties.
 
 Current limitations, which are also the worklist for the next version:
 

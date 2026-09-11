@@ -14,6 +14,7 @@ import { createFixtures } from './helpers/tmp-fixtures.js'
 import { integrate } from '../examples/orders/integrate.js'
 import { orders } from '../examples/orders/ontology.js'
 import { createErpAdapter } from '../examples/orders/erp-adapter.js'
+import pkg from '../package.json' with { type: 'json' }
 
 async function connectedClient() {
   const legacy = createFixtures()
@@ -26,6 +27,12 @@ async function connectedClient() {
   await Promise.all([server.connect(serverTransport), client.connect(clientTransport)])
   return { client, rt, legacy }
 }
+
+test('the server announces the package version — the one place it is written', async () => {
+  const { client } = await connectedClient()
+  assert.equal(client.getServerVersion()?.version, pkg.version)
+  assert.equal(client.getServerVersion()?.name, 'operational-ontology:orders')
+})
 
 test('the tool surface is generated from the model — and contains no raw data access', async () => {
   const { client } = await connectedClient()
