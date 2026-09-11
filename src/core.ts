@@ -284,10 +284,25 @@ export type ObjectOf<T extends OntologyDef, K> =
         : Record<string, unknown>
       : Record<string, unknown>
 
-/** The object type a traversal of link `L` arrives at, in direction `D`. */
-export type LinkEnd<T extends OntologyDef, L extends LinkName<T>, D extends Direction> = D extends 'reverse'
-  ? T['links'][L]['from']
-  : T['links'][L]['to']
+/**
+ * The object type a traversal of link `L` arrives at, decided by the shape
+ * of the options it was called with — not by an inferred direction, which
+ * would read `direction?: 'reverse'` as reverse even when the value is
+ * absent and the traversal runs forward. Absent: the to side (forward).
+ * A required `'reverse'`: the from side. `'forward'`, required or
+ * optional: the to side. Anything else — an optional `'reverse'`, a union —
+ * could go either way, and the type says so. (Presence is tested with
+ * `keyof`: `{ direction?: undefined }` alone is a weak type, which an
+ * options object without `direction` would fail to match.)
+ */
+export type LinkEnd<T extends OntologyDef, L extends LinkName<T>, O extends { direction?: Direction }> =
+  'direction' extends keyof O
+    ? O extends { direction: 'reverse' }
+      ? T['links'][L]['from']
+      : Exclude<O['direction'], undefined> extends 'forward'
+        ? T['links'][L]['to']
+        : T['links'][L]['from'] | T['links'][L]['to']
+    : T['links'][L]['to']
 
 /** What a caller passes to action `A` — its parameter schema's input side. */
 export type ParamsOf<T extends OntologyDef, A extends ActionName<T>> =
@@ -535,12 +550,12 @@ export class Runtime<T extends OntologyDef = OntologyDef> {
   }
 
   /** Follow a link from one object to its neighbours. Both directions are traversable. */
-  traverse<L extends LinkName<T>, D extends Direction = 'forward'>(
+  traverse<L extends LinkName<T>, O extends { actor: string; direction?: Direction }>(
     linkName: L,
     pk: string,
-    opts: { actor: string; direction?: D },
-  ): ObjectOf<T, LinkEnd<T, L, D>>[] {
-    type Target = ObjectOf<T, LinkEnd<T, L, D>>
+    opts: O,
+  ): ObjectOf<T, LinkEnd<T, L, O>>[] {
+    type Target = ObjectOf<T, LinkEnd<T, L, O>>
     const link: LinkTypeDef | undefined = Object.hasOwn(this.ontology.links, linkName)
       ? this.ontology.links[linkName]
       : undefined

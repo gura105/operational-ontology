@@ -18,6 +18,7 @@ import {
   defineOntology,
   modify,
   reject,
+  type Direction,
   type ObjectOf,
   type OntologyDef,
   type ParamsOf,
@@ -85,6 +86,24 @@ export function compileOnly(rt: ReturnType<typeof createRuntime<typeof model>>):
   const customers = rt.traverse('customerOrders', 'O1', { ...actor, direction: 'reverse' })
   assertType<Same<typeof customers, Customer[]>>()
 
+  // ── traverse decides its end from the shape of the options, not from an inferred direction ──
+  // An optional 'reverse' may be absent at runtime, and then the traversal runs forward.
+  const maybeReverse: { actor: string; direction?: 'reverse' } = actor
+  const either = rt.traverse('customerOrders', 'C1', maybeReverse)
+  assertType<Same<typeof either, (Customer | Order)[]>>()
+  const maybeForward: { actor: string; direction?: 'forward' } = actor
+  const stillForward = rt.traverse('customerOrders', 'C1', maybeForward)
+  assertType<Same<typeof stillForward, Order[]>>()
+  const explicitForward = rt.traverse('customerOrders', 'C1', { ...actor, direction: 'forward' })
+  assertType<Same<typeof explicitForward, Order[]>>()
+  const decideLater = (direction: Direction, maybe?: Direction) => {
+    const chosen = rt.traverse('customerOrders', 'C1', { ...actor, direction })
+    assertType<Same<typeof chosen, (Customer | Order)[]>>()
+    const maybeChosen = rt.traverse('customerOrders', 'C1', { ...actor, direction: maybe })
+    assertType<Same<typeof maybeChosen, (Customer | Order)[]>>()
+  }
+  void decideLater
+
   const pending = rt.search('Order', { ...actor, filter: { status: 'pending' } })
   assertType<Same<typeof pending, Order[]>>()
   rt.search('Order', { ...actor, filter: (o) => o.total > 100 })
@@ -143,6 +162,10 @@ test('the typed calls read and write the same store as before', () => {
   const [customer] = rt.traverse('customerOrders', 'O1', { ...actor, direction: 'reverse' })
   assert.equal(customer?.name, 'Yamada')
   assert.deepEqual(rt.traverse('customerOrders', 'C1', actor).map((o) => o.status), ['pending', 'shipped'])
+  // An optional 'reverse' that is absent at runtime runs forward: orders come back, and
+  // the type above admits them (the hole a review of this change found).
+  const maybeReverse: { actor: string; direction?: 'reverse' } = actor
+  assert.deepEqual(rt.traverse('customerOrders', 'C1', maybeReverse).map((o) => o.id), ['O1', 'O2'])
   assert.equal(rt.execute('cancelOrder', { orderId: 'O2', reason: 'late' }, actor).ok, false)
   assert.equal(rt.execute('cancelOrder', { orderId: 'O1', reason: 'late' }, actor).ok, true)
   assert.equal(rt.get('Order', 'O1', actor)?.status, 'cancelled')
