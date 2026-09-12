@@ -43,7 +43,8 @@ export interface ObjectTypeDef<S extends Properties = Properties> {
    * declaration — it has no authentication, so `actor` is self-declared and
    * enforcement here demonstrates placement, not protection. A fail-closed
    * deployment makes this slot required rather than optional, on top of an
-   * authenticated identity layer. See "permissions and security" in the README.
+   * authenticated identity layer. See "Visibility and caller identity"
+   * in IMPLEMENTATION.md.
    */
   visibility?: (ctx: { object: ObjectInstance<string, z.output<z.ZodObject<S>>>; actor: string }) => boolean
   /**
@@ -137,7 +138,7 @@ export function reject(code: string, message: string): Violation {
 /**
  * Edits are data: what an action wants to change, decoupled from how it is
  * applied. Links are edits too — actions can rewire the graph itself, not
- * just node properties. (Deletes are out of scope in v0.2 — see the README.)
+ * just node properties. Deletes are out of scope; see IMPLEMENTATION.md.
  */
 export type Edit =
   | { op: 'modify'; object: string; pk: string; changes: Record<string, unknown> }

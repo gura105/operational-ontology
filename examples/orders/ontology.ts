@@ -163,7 +163,7 @@ export const orders = defineOntology({
      * order under the same gate — the order must exist and be visible to the
      * actor, and the one-to-many cardinality of orderNotes is enforced.
      * Notes are ontology-owned, so no write-back; the caller supplies the id
-     * (see "What if an agent retries?" in the README — an invocation-supplied
+     * (see "Retries" in IMPLEMENTATION.md — an invocation-supplied
      * id is also the minimal idempotency hook).
      */
     addOrderNote: defineAction(objects, {

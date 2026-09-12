@@ -37,9 +37,9 @@ export * from './model.js'
 /**
  * Propagates an action's edits toward the systems of record, running BEFORE
  * the local commit — write-back-first, the declared failure semantics (see
- * "Failure semantics" in the README). The adapter speaks to the systems of
- * record and to nothing else; that boundary is a declared contract, not an
- * enforced one (see "Transaction ownership" in IMPLEMENTATION.md). It
+ * "Failure semantics in detail" in IMPLEMENTATION.md). The adapter speaks
+ * only to the systems of record; that boundary is a declared contract, not
+ * an enforced one (see "Transaction ownership" in IMPLEMENTATION.md). It
  * receives its own copies of the plan and the target object, so nothing it
  * mutates leaks back into the runtime.
  */

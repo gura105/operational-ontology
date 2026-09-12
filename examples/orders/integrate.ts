@@ -64,7 +64,7 @@ export function integrate({ north, south }: LegacyDbs) {
 
   // Links — the FK becomes customerOrders, the join tables become orderProducts.
   // The line items' qty stays in the data layer for now: link properties are a
-  // declared non-goal (see README, Non-goals).
+  // declared limit (see "Current limits" in IMPLEMENTATION.md).
   const customerOrders = orders.map((o): [string, string] => [o.customerId, o.row.id])
   const orderProducts: Array<[string, string]> = [
     ...north.prepare('SELECT order_no, item_cd FROM tbl_order_line').all().map((r: any): [string, string] => [

@@ -32,7 +32,7 @@ export function createErpAdapter(dbs: LegacyDbs): WritebackAdapter {
         // The system of record re-verifies its own invariant on cancellation:
         // a guarded UPDATE lets the ERP refuse a stale cancel even when the
         // ontology's view of the order was out of date (see "Preconditions
-        // and freshness" in the README).
+        // and freshness" in IMPLEMENTATION.md).
         if (order.sourceSystem === 'north') {
           const res = dbs.north
             .prepare(`UPDATE tbl_order SET stat = ? WHERE order_no = ?${status === 'cancelled' ? ' AND stat != 1' : ''}`)

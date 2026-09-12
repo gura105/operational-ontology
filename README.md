@@ -5,115 +5,81 @@
 [![CI](https://github.com/gura105/operational-ontology/actions/workflows/ci.yml/badge.svg)](https://github.com/gura105/operational-ontology/actions/workflows/ci.yml)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](./LICENSE)
 
-> **An operational ontology is a shared domain model built on top of the data of systems you don't own — objects, links, and actions — where reads traverse the model and writes are gated by actions that carry business rules, are audited, and propagate back to the systems of record that own the state they change.**
+> **An operational ontology is a shared domain model over other systems' data: objects and links for reading the business, and actions that enforce business rules, audit attempts, and write changes back to the systems of record.**
 >
 > A semantic layer lets you *read* your business. An operational ontology lets you *run* it.
 
 <img src="./assets/hero-diagram.svg" alt="Reads travel from a shared model to agents, apps, and people. Writes enter through an audited action gate and write back to the systems of record that own the state.">
 
-Palantir Foundry's Ontology is one implementation of this pattern. This repository is another: a minimal reference implementation, small enough to read in one sitting. It exists to make the definition precise and runnable; it is not a framework. Fork it and reuse the ideas.
+This repository makes that definition runnable in a small TypeScript reference implementation. Palantir Foundry's Ontology is the pattern's starting point; this example isolates the ideas so you can read, fork, and adapt them. It is a learning resource, not a framework or an npm dependency.
 
 ## Quickstart
+
+Requires Node.js 24 or later and pnpm.
 
 ```sh
 pnpm install
 pnpm demo    # physical data → integrate → index → read → write → refusal → write-back
-pnpm test    # the same behavior, as executable tests
+pnpm test    # verify the behavior
 ```
 
-The demo uses the scenario from the [article this repository accompanies](https://www.dataengineeringweekly.com/p/building-an-operational-ontology). A company acquires a competitor and inherits **two legacy order systems with different schemas and status encodings**. A few dozen lines of SQL and a small TypeScript mapping integrate them, and the ontology models `Customer`, `Order`, and `Product` on top — plus `Note`, a type that exists in no source system. The demo then shows:
+The demo follows the [accompanying article](https://www.dataengineeringweekly.com/p/building-an-operational-ontology): a company acquires a competitor and inherits **two legacy order systems with different schemas and status encodings**. SQL and a small mapping integrate their data into one model. Run it to see:
 
-- a link traversal answering "which orders contain this product?" across both systems
-- `assignOrder` writing state that exists in no legacy system — edits can live in a layer above the sources
-- `cancelOrder` on a shipped order refused with `SHIPPED_ORDER_CANNOT_BE_CANCELLED`
-- `cancelOrder` on an open order succeeding, with the row in the legacy ERP actually changing
-- a re-index of the live legacy systems, where order data refreshes from the ERP while the assignment and notes — state the ontology itself owns — survive
-- every attempt, applied or refused, recorded in the audit log
+- links and aggregates answer questions across both systems;
+- `cancelOrder` refuse a shipped order and write an allowed cancellation back to the original ERP;
+- `assignOrder` and `addOrderNote` store state owned by the ontology, which survives re-indexing while source data refreshes;
+- applied and rejected action attempts appear in the audit log.
 
 https://github.com/user-attachments/assets/02bb8ca0-a476-4e33-b0ea-25c46c6e9dda
 
+## Why define Operational Ontology?
+
+Answering “How many unshipped orders does this customer have?” consistently requires a model for reading data in business terms. When an application or AI agent goes on to cancel an order, it also needs to check the operation's conditions, record the attempt, and deliver the change to the ERP that owns the record. Treating these responsibilities as part of a shared model is this repository's starting point.
+
+The terms “semantic layer” and “ontology” alone do not tell us how much of that responsibility is included. Comparing nearby concepts by what they model and how they handle business operations makes the distinction clearer.
+
+| Concept or arrangement | What it primarily models | Relationship to business operations |
+| --- | --- | --- |
+| Semantic layer | The meaning of metrics, attributes, and aggregates | Answers data questions consistently. Operation conditions and write-back require additional design. |
+| Formal ontology / knowledge graph | Conceptual meaning, entities, and relationships | Represents meaning and relationships. Business rules and audit need to be designed alongside data updates. |
+| AI context layer | Meaning and background for answers and decisions | Supports an agent's understanding. Governance of the operations it executes requires additional design. |
+| CRUD API / API wrapper | Data access or individual operations | Where rules, audit, and write-back are enforced depends on each API's design. |
+| **Operational ontology** | **Shared objects and links, plus actions carrying business rules** | **Makes operation conditions, audit, and write-back to authoritative sources part of the shared model's contract.** |
+
+These technologies can be combined. The arrangement we want to name is one where **every consumer changes state through the same model, under the same business rules**. We draw this arrangement from Foundry's Ontology and define it as Operational Ontology through the four properties below, so it can be discussed and implemented independently of a particular product.
+
 ## The four properties
 
-A system implements the pattern when all four properties hold. They constrain *what* must be true, not *how* to build it: outbox or webhook, SQL or search index, one store or many are all implementation choices. Treat them as shared vocabulary for discussing systems, not as a certification to pass.
+This repository uses *operational ontology* for a system with all four properties. They describe the pattern; storage engines, integration tools, and consistency mechanisms are implementation choices.
 
-1. **Semantic objects and links.** Business entities and their relationships are modeled explicitly, on top of physical data that existed first and that other systems own.
+1. **Semantic objects and links.** Business entities and relationships are modeled explicitly over existing data owned by other systems.
+2. **Action-gated writes.** Business decisions change state only through named actions. Every consumer uses that same API. Source re-indexing is a separate infrastructure operation.
+3. **Business rules at the action.** Preconditions enforce domain invariants such as “a shipped order cannot be cancelled.” Violations produce machine-readable refusals, and both applied and rejected attempts are audited. Preconditions express business validity; access policies decide who may act.
+4. **Write-back to systems of record.** Every piece of state has a declared owner, and changes to source-owned state propagate back to its owner through governed side effects. The pattern includes actual writes to source-owned state.
 
-2. **Action-gated writes.** A business decision changes state only through a named action. There is no generic update path — not for a user, not for an application, not for an agent. State in this layer also changes for two other reasons, and neither is a loophole: re-indexing only replays what the sources already say, and schema evolution (under review) changes what can be said, not what is true. Any write that picks a business outcome is a decision, whatever the endpoint is named, and decisions go through actions.
+Ownership has three forms in the example:
 
-3. **Business rules at the action.** Preconditions check domain invariants ("a shipped order cannot be cancelled") and refuse violations with machine-readable errors. They are not access control, and not UI validation. Every attempt, applied or refused, is recorded in the audit log.
+- **source-backed:** the ERP owns `Order.status`; cancellation writes back to it.
+- **ontology-owned:** the ontology owns the assignee and notes, which have no source columns.
+- **derived:** totals and counts are computed at query time and are never written.
 
-   <img src="./assets/action-gate.svg" alt="Every caller — human or AI agent — invokes the named action cancelOrder through the same governed gate. The precondition refuses shipped orders with a machine-readable error; an applied call transitions the status. Every attempt, applied or refused, lands in the audit log. A generic UPDATE path is absent by design.">
+<img src="./assets/authority-map.svg" alt="An authority map for an Order object. Status and total are source-backed by the upstream order system and use a governed write-back path. Assignee and Note are ontology-owned, making the ontology datastore their single source of truth. Aggregates and counts are derived, computed only, and never written. State with no declared owner is forbidden.">
 
-4. **Write-back to systems of record.** The model declares, for every piece of state, which system owns it. There are three kinds:
+## The pattern in code
 
-   - **source-backed** — state owned by an upstream system, such as an order's status mastered in the ERP. A change to it propagates back to that source as a governed, ordered side effect; the source stays authoritative.
-   - **ontology-owned** — state no source system has a column for, such as an assignee or a triage note. For this state the ontology's own store is the system of record, by declaration.
-   - **derived** — computed state such as aggregates and counts. It is never written.
+The model is a plain value containing object types, link types, and action types. Each definition has corresponding instances at runtime.
 
-   What the property forbids is state with no declared owner: a local copy of source-owned data that is modified but never written back, or a write nobody can place. An implementation with no source-backed writes at all does not implement a smaller version of this pattern; it is an ordinary application with its own database.
+| Definition (type) | Runtime instance |
+| --- | --- |
+| Object type: `Order` | An individual order and its properties |
+| Link type: `customerOrders` | A connection between a particular customer and order |
+| Action type: `cancelOrder` | One call attempting to cancel a particular order |
 
-   <img src="./assets/authority-map.svg" alt="An authority map for an Order object. Status and total are source-backed by the upstream order system and use a governed write-back path. Assignee and Note are ontology-owned, making the ontology datastore their single source of truth. Aggregates and counts are derived, computed only, and never written. State with no declared owner is forbidden.">
+Edits describe the changes an action proposes to objects and links. The audit log records execution attempts and their outcomes, including application and refusal. Definitions live in code; instance state and execution records live in the store.
 
-A quick test: **"Can you cancel an order from your semantic layer?"**
+The model is data rather than classes so the information needed to describe an operation can be enumerated. The method signature in `class Order { cancel() {} }` alone does not expose parameter validation rules or preconditions. This implementation keeps that information in the definition value, so applications can share the model, inspect it at runtime, and generate MCP tools from it.
 
-- If the answer is no, you have a read layer — useful, but a different thing.
-- If the answer is yes but no row in any system of record ever changes, you have a parallel database — also a different thing.
-- If it also cancels already-shipped orders without complaint, you have a write API; property 3 is the whole difference.
-
-## Why another word?
-
-The pattern needs a name of its own because "ontology" already means too many things:
-
-| called an "ontology" | what it is | governed writes? |
-| --- | --- | --- |
-| philosophical ontology | the study of what exists | — |
-| formal ontology (OWL / RDF) | machine-reasonable semantics | no |
-| knowledge graph | entities and relationships — writable as data, not as operations | no |
-| AI context layer (the 2026 wave of "ontology"-branded platform features) | semantic grounding for AI answers | no |
-| **operational ontology (Foundry-style)** | business domain schema **+ rule-carrying actions** | **yes** |
-
-Each row is a legitimate tool, and the table is not a ranking. But the one property that changes what a layer can *do* — whether it accepts writes governed by business rules — cuts across the whole table and had no name of its own. This repository gives it one.
-
-## What an implementation declares
-
-The four properties leave the mechanisms open, but some choices differ between implementations in ways users can observe. Those choices must be declared, not left silent. There are four:
-
-- **Authority** — which state is source-backed, which ontology-owned, which derived.
-- **Failure semantics** — what happens when write-back and the local commit disagree.
-- **Re-indexing vs edits** — whether ontology-owned state survives a refresh of the base.
-- **Visibility default** — what an object with no policy falls back to.
-
-This repository's answers, in the same order. Ownership is declared in the model — `owned` marks ontology-owned properties, link types, or whole object types, and `writeback: true` marks an action's changes source-backed — and the runtime checks every edit plan against those declarations instead of trusting them ([details](./IMPLEMENTATION.md#the-authority-line-checked)). Write-back runs before the local commit, so if the source refuses, nothing changes here (see [Failure semantics](#failure-semantics)). Ontology-owned state survives re-indexing: edits live in an overlay that `load()` reapplies over the fresh base, and a re-index that would orphan an edit is refused whole. Visibility defaults to fail-open: no policy means visible to everyone (see the [FAQ](#faq)).
-
-All four answers are also collected in one enumerable value, `Runtime.declarations`, so they can be read at runtime rather than trusted as prose. An implementation may answer all four differently and still be inside the pattern. If a product calls itself an operational ontology, ask for its four answers, not for a certificate.
-
-## For AI agents (MCP)
-
-```sh
-pnpm mcp     # serve the same ontology to agents over stdio
-```
-
-The MCP tool surface is generated from the model: `search_order`, `traverse_customer_orders`, `cancel_order`, `read_audit_log`, … — one tool per query shape and one per action. The tool surface is derived from the schema side; the calls act on the instance side. Two consequences:
-
-- **There is no raw SQL tool.** Agents get exactly the operations the model defines, and nothing else.
-- **The same preconditions that gate humans gate agents.** An agent that tries to cancel a shipped order receives `{ "error": { "code": "SHIPPED_ORDER_CANNOT_BE_CANCELLED", … } }` — a machine-readable refusal it can read, recover from, and explain to its user.
-
-Reads are scoped the same way. Every query runs as an actor — the identity on whose behalf the call is made — and visibility policies attached to the model decide which objects that actor can see. Agent sessions are no exception; the audit log is the one declared exception, an unscoped administrative view. Over stdio all callers collapse into one actor. `OO_AGENT=<name> pnpm mcp` names that actor, which is labeling, not authentication.
-
-https://github.com/user-attachments/assets/28327062-e09f-4103-943e-434a0e55b327
-
-**Business rules live in the ontology, not in the prompt.**
-
-| approach | reads | writes | rules enforced by |
-| --- | --- | --- | --- |
-| raw DB access (SQL tool / DB MCP) | tables | unrestricted `UPDATE` | nothing — the prompt, at best |
-| semantic layer / metrics MCP | governed metrics | — | n/a (read-only) |
-| API wrapper tools | endpoints | per-endpoint | each backend, inconsistently |
-| **operational ontology** | objects, links, aggregates | **named actions only** | **preconditions in the model, audited** |
-
-## The pattern
-
-The model defines three kinds of types: object types, link types, and action types. At runtime their instances — objects, links, and applied actions — live in the store. The remaining two concepts connect the pairs: edits are the changes to objects and links that an action instance describes, and the audit log is where the action instances themselves are recorded. All five concepts are defined as data and interpreted by a runtime (`src/core.ts`), with the definitions and derived types in `src/model.ts`:
+In this extract, the cancellation rule lives alongside the action's parameters and the edits it describes. The imports and complete model are in [`examples/orders/ontology.ts`](./examples/orders/ontology.ts).
 
 ```ts
 const objects = {
@@ -157,143 +123,77 @@ const ontology = defineOntology({
 })
 ```
 
-Because the definition is a plain value, it can be enumerated, diffed, and versioned; the MCP tool surface above is derived from it mechanically.
+Calling `execute('cancelOrder', …)` loads the target and checks the rule. For an allowed write, the runtime validates the edit plan, writes it back, then commits the local edits and audit entry. The effects function only describes changes; the adapter performs the external write.
 
-`defineAction(objects, …)` gives the rule callbacks their object and parameter types. `modify(object, changes)` derives identity from the instance and checks the changed properties. Reads return the same `{ type, pk, properties }` shape used by rules, visibility predicates, query callbacks, and the write-back adapter's `meta.target`:
+<img src="./assets/action-gate.svg" alt="Every caller — human or AI agent — invokes the named action cancelOrder through the same governed gate. The precondition refuses shipped orders with a machine-readable error; an applied call transitions the status. Every attempt, applied or refused, lands in the audit log. A generic UPDATE path is absent by design.">
 
-```ts
-const actor = { actor: 'user:hq' }
-const customer = rt.get('Customer', 'N-C01', actor)!
-// { type: 'Customer', pk: 'N-C01', properties: { id: 'N-C01', name: 'Yamada', … } }
-const orders = rt.traverse(customer, 'customerOrders', actor) // Order instances
-const customers = rt.traverse(orders[0], 'customerOrders', actor) // Customer instances
-console.log(orders[0].properties.status)
+## For AI agents (MCP)
+
+```sh
+pnpm mcp     # serve the same ontology over stdio
 ```
 
-The source instance determines the available links and directions in editor hints. For `Customer → Order`, either end determines the direction, so it can be omitted. For `Employee → Employee`, pass `{ actor, direction: 'forward' }` for subordinates or `{ actor, direction: 'reverse' }` for managers, assuming the link is defined from manager to subordinate. That choice is required by both TypeScript and the runtime, even if the particular employee has edges in only one direction. Only the link's existing name is needed; there are no directional aliases. MCP traversal tools accept the instance as `source` and follow the same rules. [Instance and traversal details](./IMPLEMENTATION.md#instances-and-traversal).
+The server generates tools such as `search_order`, `traverse_customer_orders`, `cancel_order`, and `read_audit_log` from the model. An agent cancelling a shipped order receives `SHIPPED_ORDER_CANNOT_BE_CANCELLED`, just as a human caller does. Business rules live in the model, so the prompt does not have to enforce them.
 
-`Runtime.execute()` is the only operational write path the API exposes. Every call, applied or refused, creates one action instance and records it in the audit log. The steps always run in this order:
+The repository's [MCP configuration](./.mcp.json) connects the orders example. Session identity and tool input details are in the [implementation notes](./IMPLEMENTATION.md#visibility-and-caller-identity).
 
-1. validate the parameters
-2. evaluate the preconditions
-3. run the effects function, which returns an edit plan and performs nothing itself
-4. dry-run the whole plan through the same code the commit uses, then roll it back
-5. check the plan against the authority declarations
-6. write back to the systems of record
-7. commit the edits and the audit entry in one transaction
+https://github.com/user-attachments/assets/28327062-e09f-4103-943e-434a0e55b327
 
-This closure is a contract on the API, not a privilege boundary: the runtime lives in its caller's process, and code that holds the database handle itself can bypass the gate ([details](./IMPLEMENTATION.md#transaction-ownership)). `load()` is separate infrastructure: it re-indexes the sources — replay, not decision — and is not a user API.
+## Reading the code
 
-Reads carry identity too. Every `search` / `get` / `traverse` / `aggregate` runs as an `actor`, and an object type may attach a `visibility` predicate — row-level security in its minimal form, stored in the model like everything else. A hidden object is indistinguishable from a nonexistent one, both for reads and as an action target.
+Start with the first three files; use the others to follow a particular part of the demo.
 
-Edits are data as well: `modify`, `create`, and `link` / `unlink`. Actions can therefore change link instances, not just properties. Link types are schema and do not change here; the links themselves are instances, and they change only through actions — cardinality included: the runtime refuses a `link` that would give an order two customers. "Reassign this order to another customer" is an unlink plus a link, applied atomically under the same preconditions as everything else. Creation goes through the same gate: the demo's `addOrderNote` creates an ontology-owned note and links it to its order in one atomic plan. Deletes are out of scope in this version (see [Status](#status)); changing the model itself — new object types, new link types — is schema evolution (see the FAQ).
+| File | What to look for |
+| --- | --- |
+| [`examples/orders/ontology.ts`](./examples/orders/ontology.ts) | The business model: objects, relationships, ownership, and action rules. |
+| [`examples/orders/demo.ts`](./examples/orders/demo.ts) | A caller exercising reads, successful writes, refusals, and re-indexing. |
+| [`src/core.ts`](./src/core.ts) | The interpreter: follow `execute()` through validation, write-back, and audit. |
+| [`src/model.ts`](./src/model.ts) | The definition helpers, instance shape, and model-derived TypeScript types. |
+| [`examples/orders/integrate.ts`](./examples/orders/integrate.ts) | How the two legacy schemas become one snapshot. |
+| [`examples/orders/erp-adapter.ts`](./examples/orders/erp-adapter.ts) | How an accepted change reaches its source, including refusal of a stale cancellation. |
+| [`src/mcp.ts`](./src/mcp.ts) | How the same model becomes the agent's tool surface. |
 
-The model is data rather than classes for a practical reason. `class Order { cancel() {} }` cannot be enumerated into agent tools, shared across applications, or inspected at runtime without an added reflection layer, and its signature says nothing about preconditions. A class-based domain layer is private to one application; the point of this pattern is a domain layer that is shared.
+[`tests/`](./tests/) makes the behavior and typing expectations executable. The [implementation notes](./IMPLEMENTATION.md) explain API details, processing order, and edge cases.
 
-The type/instance split is a general one — formal ontology calls the sides TBox and ABox — and it is no part of what makes the pattern; as an anatomy of it, though, it works well. Foundry uses the same phrasing for all three pairs — object type and object, link type and link, action type and action: the former is a "schema definition", the latter its individuals. The schema side — the type definitions plus the authority declarations (`owned` / `writeback`) and visibility — is a plain value that lives in git, readable at runtime as `Runtime.declarations` and as the MCP tool surface, and not changeable there. The instance side lives in the store and changes only through actions. Restated in this vocabulary, the four properties all govern the instance side. An authority declaration is a schema-side statement of who holds the truth of a piece of instance state, and that answer decides the state's write path: write-back concerns only the state whose declared owner is upstream. That the edit vocabulary — `modify` / `create` / `link` / `unlink` — is all instance operations states the same split structurally: no edit changes the schema. Property 2's "schema evolution changes what can be said, not what is true" is this distinction in other words (querying applied actions as instances is in the FAQ).
+## Scope and declared behavior
 
-## Where this sits
+This repository implements the middle layer. The demo supplies the surrounding applications and data integration.
 
-Three layers. This repository implements the middle one only.
+State absent from the sources, such as assignees and notes, and the record of action attempts need to be kept in this layer. This implementation therefore owns a store for action edits and the audit log alongside the indexed source snapshots.
 
 <img src="./assets/where-this-sits.svg" alt="Three layers — applications, the operational ontology, and the data layer — each mapped to its implementation in Foundry and in this repository. This repository implements the middle layer, which owns its own store. At the ontology–data seam sit the two contracts: integrated physical data is given, and write-back is a governed side effect.">
 
-**Upstream contract (with the data platform):** integrated physical data is a given. Pipelines, dataset transactions, and rollback belong to the data platform.
+An implementation must declare choices that callers can observe. This one makes the following choices, also exposed as `Runtime.declarations`:
 
-**Downstream contract (with the systems of record):** write-back is a governed side effect, not a distributed transaction (see below).
+| Concern | This implementation |
+| --- | --- |
+| Ownership | Declared by `owned` and `writeback`; checked against each edit plan. |
+| Write-back failure | Write-back runs first. If the source refuses, no local edit commits. If the source succeeds and the local commit fails, the systems diverge and need reconciliation. |
+| Re-indexing | Source-backed state refreshes; ontology-owned state survives. A load that would orphan an owned edit is refused. |
+| Visibility | An object with no policy is visible to everyone. The actor is self-declared; there is no authentication. Audit reads are an unscoped administrative view. |
 
-One consequence separates this pattern from query-side layers: a layer that only answers queries can stay virtual, but a layer that accepts writes must own state. Edits exist here before — or instead of — the systems of record (`assignOrder` writes ontology-owned state no legacy system has a column for), so the ontology keeps its own store and its own audit log. What this repository does not own is the indexing machinery that makes reads fast at enterprise scale: incremental indexing, adjacency indexes, search backends. That is how Foundry serves billions of objects; it belongs to an implementation of the layer, not to the pattern.
+The runtime demonstrates the pattern with synchronous calls and SQLite. It includes no UI builder, pipeline framework, scalable indexing service, or general authorization system. The write gate is an API contract within the caller's process. These boundaries keep the implementation readable.
 
-## Failure semantics
-
-**What the pattern requires.** The pattern does not prescribe a consistency mechanism between the ontology and the systems of record; distributed transactions, ordering contracts, outboxes, and reconciliation jobs are all implementation choices. It does require the failure behavior to be **declared**, because unlike an internal mechanism, failure behavior is observable: users can watch the systems diverge. Divergence you can reason about is an engineering problem; divergence discovered in production is an incident.
-
-**What this implementation declares.** The `WritebackAdapter` runs before the local commit — the ordering of Foundry's write-back webhooks (one of Foundry's two modes; the other runs side effects after the edit). Two consequences:
-
-- If the system of record refuses, nothing changes in the ontology.
-- The reverse failure remains possible: the adapter succeeded and the local commit failed. When that happens the systems have diverged, and reconciliation is up to the operator. [Palantir's webhook documentation](https://www.palantir.com/docs/foundry/action-types/webhooks) acknowledges the same gap in Foundry's write-back mode.
-
-Three details bound that risk ([full mechanics](./IMPLEMENTATION.md#failure-semantics-in-detail)): nothing invalid ever reaches a system of record, because the whole edit plan is dry-run through the commit's own code before the adapter runs; the audit log records the full plan for both failure directions, as reconciliation material; and "every attempt is audited" means every attempt this runtime observed to completion. Within its own store the runtime is transactional: an action's edits and its audit entry commit atomically in a single SQLite transaction, and rejected attempts are logged too.
-
-**Preconditions and freshness.** Guaranteed: preconditions hold against the ontology store — the last indexed snapshot plus applied edits. Not guaranteed: the write-back step does not re-verify invariants at the source, so if a source changes behind the ontology's back, the invariant may no longer hold there. Narrowing that gap is the adapter's choice — conditional write-backs, compare-and-set, re-verification at the source. The demo adapter does this: a guarded `UPDATE` lets the ERP refuse a stale cancellation.
-
-**Concurrent edits.** Guaranteed: this implementation is a synchronous single-writer — actions execute one at a time, serialized by the runtime — and the runtime refuses to run inside a caller-opened transaction, so a committed-and-audited action cannot be silently rolled back after success was reported. Not guaranteed: the `WritebackAdapter` interface is synchronous, and a real networked write-back breaks the serialization; an implementation that goes there must declare what replaces it. The rest of the store's boundary is a declared contract, not a defended one: rules and the adapter must not touch the ontology store, because no in-process check can stop code that holds the database handle ([details](./IMPLEMENTATION.md#transaction-ownership)).
-
-**Re-indexing vs edits.** The store holds a base indexed from the sources plus the edits actions have made on top, and sources keep changing, so every implementation must decide what a re-index does to edits. Here — Foundry's shape, minimized — a snapshot may only supply source-backed state; edits to ontology-owned properties survive via an overlay reapplied over the fresh base; ontology-owned types and links are untouched by `load()` altogether. A re-index that would orphan an ontology-owned edit is refused whole, leaving the previous state standing: that is a reconciliation decision, and the runtime does not make reconciliation decisions silently. The full rules — including deletes meeting surviving edits, and partial snapshots — are in the [implementation notes](./IMPLEMENTATION.md#re-indexing-vs-edits).
-
-## Non-goals
-
-Scope is frozen for v0 so the reference implementation stays small enough to read in one sitting:
-
-- **No UI builder.** Applications consume the ontology; they are not part of it.
-- **No pipeline framework.** Integration is a prerequisite; the demo uses plain SQL.
-- **No indexing infrastructure.** Naive queries are fine at demo scale; scale is a property of implementations, not of the pattern. Result sets are unbounded in v0.
-- **No federation.** One ontology is one bounded context. Who owns the model when there are several is a real question, and unaddressed in v0, like schema evolution.
-- **No link properties or composite keys (yet).** The demo's order-line quantities deliberately stay in the data layer; whether they become a first-class `OrderLine` or properties on the link is a decision for the next version.
-- **No OWL/RDF.** Academic ontologies are semantic-only — no actions. A different tool for a different job.
-- **No general authorization system.** The pattern-level part is here: identity flows through every call (the audit log's administrative view is the declared exception) and visibility attaches to the model. The mechanism — groups, attributes, policy languages, cell-level security, propagation — is a policy engine's job.
-- **No npm package.** Fork it; don't depend on it.
-- **Not a Foundry alternative.** Foundry implements all three layers, vertically integrated; this repository names and demonstrates the middle one.
-
-## Prior art
-
-- **Palantir Foundry Ontology** — the implementation this pattern was distilled from, including its [semantic/kinetic vocabulary](https://www.palantir.com/docs/foundry/ontology/overview), [action types](https://www.palantir.com/docs/foundry/action-types/overview), [write-back webhooks](https://www.palantir.com/docs/foundry/action-types/webhooks), and Ontology MCP. This repository describes the pattern independently of any vendor.
-- **DDD, CQRS, event sourcing** — the parts are deliberately old: entities, aggregates, commands, guarded state transitions, append-only logs. What is new is the placement: the domain layer lifted out of a single application, put on top of other systems' data, and shared by many applications and agents.
-- **Semantic layers** (dbt, Cube, AtScale, …) and **knowledge graphs / OWL / RDF** — governed reads without governed writes; the adjacent categories this pattern is defined against.
-- **"Operational ontology"** — the phrase itself has prior use. Academic ontology engineering has used it with unrelated meanings, and Vladimir Kozlov's 2025 LinkedIn essays ([a definition](https://www.linkedin.com/pulse/operational-ontology-semantic-interface-between-data-action-kozlov-njnle), [a Foundry walkthrough](https://www.linkedin.com/pulse/understanding-palantirs-operational-ontology-beginners-kozlov-d0vse)) applied it to the same lineage described here: Foundry-style models that carry actions, not just semantics. FSTech, a Brazilian consultancy, has published an [Operational Ontology Framework](https://github.com/fstech-digital/operational-ontology-framework) (Portuguese-first, since early 2026) that applies the phrase to an adjacent but different concern — governance principles for stateful AI agents (Data + Logic + Action plus session-state artifacts) — where write-back means persisting durable state between sessions, not writing to systems of record. What this repository adds is a testable boundary — the four properties, write-back and audit included — and a reference implementation of it.
+Creation is limited to ontology-owned objects; deletes, link properties, and composite keys are unsupported. The [implementation notes](./IMPLEMENTATION.md#current-limits) document the remaining limits and API details. Published versions are in the [release notes](https://github.com/gura105/operational-ontology/releases).
 
 ## FAQ
 
-**Isn't this just CRUD with validation?** The parts are familiar; the configuration is not. CRUD validation lives inside one application, on tables that application owns. Here the model sits on data other systems own, is shared by every consumer (UIs, scripts, agents), closes every write path except actions, audits every attempt, and writes accepted changes back to the systems of record. The closest existing description is a CQRS command layer extracted from the application and placed over someone else's data.
+**Isn't this just CRUD with validation?**
 
-**Isn't a knowledge graph writable too?** Yes. SPARQL UPDATE can set `status = 'cancelled'`, and a `WHERE` clause or a SHACL shape can make it conditional. Both sides are there too — a schema and instances. What is missing is the third pair: action types with their instances. What a triple store does not provide as one first-class unit is the rest of the contract: a named business operation, a machine-readable refusal, an audit trail of attempts, and write-back to the system of record. The difference is not capability — all of this can be built on a triple store — but what comes named, governed, and first-class out of the model.
+The parts are familiar; the configuration is not. Typical CRUD validation lives inside one application, on tables that application owns. Here the model sits on data other systems own, is shared by every consumer (UIs, scripts, agents), routes every business write through actions, audits every attempt, and writes accepted changes back to the systems of record. The closest existing description is a CQRS command layer extracted from the application and placed over someone else's data.
 
-**Why not OWL/RDF?** Those model what things *are* (semantic). Half of this pattern is what you can *do* (kinetic): actions, preconditions, audit, write-back. A reasoner cannot cancel an order.
+**Isn't a knowledge graph writable too?**
 
-**Why TypeScript definitions instead of YAML?** Because business rules are code, and rule-expression languages embedded in YAML tend to grow into ad-hoc rule engines. TypeScript object literals keep the model enumerable while the rules stay ordinary typed code. (The model types names, instances, action params, rule contexts, and `modify` payloads; see [Status](#status).) Structure as data, rules as functions — the same split Foundry makes between Ontology Manager and Functions.
+Yes, including conditional updates. It also has both a schema and instances. Operational Ontology adds action types (business operation definitions) and their instances (individual execution attempts). It brings named business operations, machine-readable refusals, an audit trail of attempts, and write-back to the systems of record into the model as one unit. The difference is not capability — all of this can be built on a triple store — but what the model defines and governs as first-class elements.
 
-**What about transactions and rollback?** Three domains, three answers. Dataset versioning and rollback belong to the data layer (in Foundry: catalog transactions and branching). Atomic application of an action's edits belongs to this layer (implemented here as a real SQLite transaction). The consistency mechanism for cross-system write-back is implementation-defined; the pattern requires it to be declared, and this implementation declares write-back-first ordering (see [Failure semantics](#failure-semantics)).
+**Why TypeScript definitions instead of YAML?**
 
-**What about permissions and security?** Three different things hide in that question:
+Because business rules are code, and rule-expression languages embedded in YAML tend to grow into ad-hoc rule engines. TypeScript object literals keep the model enumerable while the rules stay ordinary typed code. Structure as data, rules as functions.
 
-- **Authentication** is outside the pattern: an identity arrives already established. Here `actor` is a self-declared string — this implementation demonstrates placement, not protection.
-- **Authorization**: its *placement* is part of the pattern — policies attach to object types and actions and bind every consumer's reads and writes, the way Foundry counts dynamic security among the Ontology's kinetic elements. Its *mechanism* (groups, attributes, policy languages, cell-level security, propagation) is implementation-defined.
-- **Preconditions** are neither: they are validity, not permission.
+## Prior art
 
-The distinction matters to agents, which recover differently from each:
-
-- **visibility** — you can't see it
-- **permission** — you can't do it
-- **precondition** — nobody can
-
-(Foundry blends permission and validity in its action submission criteria and still conforms; the separation is a recommendation, not a requirement.)
-
-Two design choices follow. `preconditions` is a required key, and an empty list is an explicit decision: gated writes are the core of the pattern, so "no conditions" must be stated, not defaulted. `visibility` is an optional key, because whether authorization exists at all is implementation-defined; an object without a policy is visible to everyone (**fail-open**). A reference implementation without authentication cannot be meaningfully fail-closed, so it does not pretend to be. Foundry's baseline is the opposite — discretionary grants expand access from zero, and mandatory markings deny on top. A fail-closed deployment starts by making `visibility` required, and also needs real authentication, action permissions, and scoped audit access underneath. One more declared surface: the audit log read API is unscoped — an administrative view where visibility filtering does not apply.
-
-**What about Foundry's Functions and derived properties?** Foundry counts three kinetic elements: actions, functions, dynamic security. Function-backed actions are already inside this pattern — preconditions and effects are ordinary code that describes changes; effects return an edit plan and perform nothing themselves, and side effects belong to the adapter. Read-time computation — derived properties, query functions — is deliberately outside: the pattern's distinguishing half is governed writes, not computed reads. Dynamic security is the permissions story above.
-
-**What if an agent retries?** This implementation has no idempotency keys. A retried `cancelOrder` is refused by its own precondition (`ORDER_ALREADY_CANCELLED`) — natural idempotency via the rules, not a guarantee — and a retry that interleaves with write-back can double-apply the side effect at the source. If your actions are not naturally idempotent, an invocation id in the params (audited like everything else) is the minimal starting point: it buys correlation, and actual deduplication needs a uniqueness check on that id. Idempotency is implementation-defined, and worth declaring, because agents do retry. There is a structural reason underneath: an action instance is individuated by its occurrence, not by its arguments. The same parameters submitted twice are not one attempt repeated but two instances — which is why the audit log cuts one entry per attempt, and why an idempotency key is a device that grafts value identity onto an action that natively has only event identity.
-
-**Could past actions be queried like objects?** They could — Foundry demonstrates it: its [action log](https://www.palantir.com/docs/foundry/action-types/action-log) materializes each submission as a `[LOG]` object linked to every object the action edited, so applied actions join the graph as searchable, traversable, aggregable instances. This implementation keeps the audit log outside the object graph, and the reason is contracts, not modesty. Three of the log's contracts resist objectification: it records rejected and crashed attempts, which commit nothing; its write must never fail — a value it cannot encode becomes a placeholder, the opposite contract to schema validation, which refuses; and the runtime writes it directly, not through an action, so entries as ordinary objects would need a declared exception to property 2. If a future version wants queryable action instances, the open path is projection, not replacement: treat the audit log as one more source — owned by the runtime, replayed by indexing — and derive action-instance objects from it. Derived state is never written, so immutability comes for free, and the log stays the substrate underneath. Foundry's own architecture agrees: the `[LOG]` projection exists alongside platform audit logging, not instead of it.
-
-**How does the ontology itself change?** Schema evolution — new object types, changed properties, retired links — is real and out of scope here, like federation. Foundry has versioning and proposal machinery for it, and the academic field studies it as *ontology evolution*. What this repository contributes is the precondition for evolving safely: the model is a plain value, so it can be diffed, versioned, and reviewed like any other code. This layer therefore has two channels of governance: instance changes are governed at runtime, by actions and the audit log; schema changes are governed at development time, by diffs and review. The schema has no address in the store — code is the only place it persists — and that is a choice, not a limitation: versioning and approval are delegated wholesale to git. If schema governance ever moves to runtime, the open path is lowering structure into data, not lowering rules into data; rules stay code. Domain modeling is not a one-shot step; the model keeps being re-fit to the business.
-
-**Bring your own frontend?** Yes. The application contract is two kinds of calls — queries (`search`/`get`/`traverse`/`aggregate`) and `execute(action)` — the same for humans and agents, and every call is made as an actor. A dashboard uses the first; a "cancel" button uses the second. Rules follow the model, not the frontend.
-
-## Status
-
-Reference implementation. The current API uses tagged object instances, derives traversal results from the source type and link, and types action callbacks through `defineAction(objects, …)`. Keep the inferred model type to retain these checks; annotating the definition as `OntologyDef` erases its specific names and schemas. The instance shape, `traverse` arguments, `defineAction` arguments, and `modify` arguments have changed since v0.3. Earlier versions are described in the [release notes](https://github.com/gura105/operational-ontology/releases).
-
-Current limitations, which are also the worklist for the next version:
-
-- A plan that changes both source-backed and ontology-owned state is refused whole; per-edit routing is future work.
-- Creation is limited to ontology-owned types; source-backed creation carried by write-back is not demonstrated yet.
-- No deletes.
-- No link properties or composite keys.
-- `create`, `link`, and `unlink` edits are checked at runtime; their payloads are not derived from the model at compile time.
-- Object sets and pivot are deferred.
-- Nested properties are not validated strictly.
-
-The mechanics behind this implementation's declarations are in the [implementation notes](./IMPLEMENTATION.md). Built and verified with Node 24, better-sqlite3, zod 4, MCP SDK 1.29.
+- **Palantir Foundry Ontology:** the pattern's starting point; see its [semantic/kinetic model](https://www.palantir.com/docs/foundry/ontology/overview), [action types](https://www.palantir.com/docs/foundry/action-types/overview), and [write-back webhooks](https://www.palantir.com/docs/foundry/action-types/webhooks).
+- **DDD, CQRS, and event sourcing:** related ideas for entities, commands, guarded changes, and logs. Here the domain model is shared across consumers and sits over other systems' data.
+- **Earlier uses of the term:** Vladimir Kozlov's [definition essay](https://www.linkedin.com/pulse/operational-ontology-semantic-interface-between-data-action-kozlov-njnle) and [Foundry introduction](https://www.linkedin.com/pulse/understanding-palantirs-operational-ontology-beginners-kozlov-d0vse), and FSTech's [Operational Ontology Framework](https://github.com/fstech-digital/operational-ontology-framework). This repository states its own meaning through the four properties and runnable example above.
 
 MIT © gura105

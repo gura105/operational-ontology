@@ -2,9 +2,9 @@
 
 # Implementation notes
 
-The [README](./README.md) defines the pattern and summarizes this repository's declared answers. This document explains the mechanics behind those answers: processing order, error codes, and edge cases. None of it is the pattern — all of it is what this one implementation declares — and every behavior described here is pinned by a test in [`tests/core.test.ts`](./tests/core.test.ts).
+The [README](./README.md) introduces the pattern, demo, and scope. This document describes this implementation's API and runtime behavior. The executable checks are in [`tests/`](./tests/), including runtime, type-level, and MCP tests.
 
-Every refusal named here is machine-readable: the action returns `{ ok: false, error: { code, message } }`, and the attempt is recorded in the audit log.
+An action refusal returns `{ ok: false, error: { code, message } }` and is audited. Programming and storage errors may throw; the write path records them as described below. Query errors are exceptions rather than action refusals.
 
 ## Instances and traversal
 
@@ -12,7 +12,21 @@ Every refusal named here is machine-readable: the action returns `{ ok: false, e
 
 `get`, `search`, and `traverse` return instances. Visibility, predicate filters, aggregation callbacks, action contexts, and `meta.target` receive instances too. Equality filters, `modify` changes, `create` data, and indexing rows still use business properties directly. `defineAction(objects, …)` derives `ctx.object` from its `object` name and `ctx.params` from the parameter schema. `modify(instance, changes)` produces the existing edit data; it performs no write itself. `create`, `link`, and `unlink` retain their runtime-checked payloads.
 
-`traverse(source, linkName, { actor, direction? })` accepts a full instance, with no primary-key-only or reference-only overload. The link definition determines direction:
+With the orders example, either end of a link can be the source:
+
+```ts
+const hq = { actor: 'user:hq' }
+const customer = rt.get('Customer', 'N-C01', hq)!
+const orders = rt.traverse(customer, 'customerOrders', hq) // Order instances
+const customers = rt.traverse(orders[0], 'customerOrders', hq) // Customer instances
+console.log(orders[0].properties.status)
+```
+
+TypeScript derives object and action names, instance properties, action params, and `modify` changes from the model. Keep the inferred definition type: an explicit `OntologyDef` annotation erases its specific names and schemas. Runtime validation still applies.
+
+`traverse(source, linkName, { actor, direction? })` accepts a full instance, with no primary-key-only or reference-only overload. The link definition determines direction.
+
+In the editor, entering the source instance narrows link-name completions to links connected to its type. Choosing a link then narrows the available `direction` values. A single possible direction can be omitted; a same-type link requires a choice at type-checking time.
 
 | Source type matches | Direction | Result type |
 | --- | --- | --- |
@@ -21,9 +35,37 @@ Every refusal named here is machine-readable: the action returns `{ ok: false, e
 | Both ends | `forward` or `reverse`, required | The same object type |
 | Neither end | Invalid link for this source | — |
 
+For an `Employee → Employee` link defined from manager to subordinate, `forward` gets subordinates and `reverse` gets managers. Only the existing link name is needed; there are no directional aliases.
+
 The rule depends on the declared types, not the stored edges. Results are always arrays, including for one-to-many reverse traversal. Return types depend on source and link; optional direction does not widen them. Narrow a union of source types using `type` before traversing when its ends differ. The instance is a snapshot, so traversal re-reads `(type, pk)` with the caller's actor, checks visibility at both ends, and returns an empty array for a missing or hidden source. It ignores the supplied properties for these checks. Invalid source shape, link, or direction throws.
 
 MCP reads serialize the same shape. Traversal tools take `{ source: { type, pk, properties }, direction? }`, with direction required in the schema for same-type links. The generated schemas and runtime validate dynamic inputs; the MCP adapter contains the type assertion for this boundary. Typed application calls have no permissive overload for arbitrary strings. Stored rows and audit edit payloads keep their existing format.
+
+## Visibility and caller identity
+
+Every `get`, `search`, `traverse`, and `aggregate` call carries an `actor`. An object type's optional `visibility` predicate filters reads and action targets. A hidden object behaves like a missing one: `get` returns `undefined`, traversal returns no hidden rows, and `execute` refuses a hidden target with `TARGET_NOT_FOUND`.
+
+Authentication establishes the actor's identity outside the runtime. When an implementation provides authorization, policies belong on object types and actions so every consumer is subject to the same constraints. That placement is a separate design choice from the mechanism used to implement it, such as groups, attributes, or a policy language. Preconditions check business validity. Separating permission from validity is recommended; implementing them as separate mechanisms is not a condition of the pattern.
+
+This reference implementation demonstrates where model-attached policies live and how they act. How much authorization to provide is an implementation choice; here, `visibility` is optional and declared to default to fail-open: visible to everyone. The actor is a self-declared string; the runtime provides neither authentication nor a general action-permission system. Making visibility declarations mandatory alone cannot protect access based on verified user identities. Audit reads remain an unscoped administrative view, without visibility filtering.
+
+Over MCP stdio, callers share one actor. `OO_AGENT=<name> pnpm mcp` labels it as `agent:<name>`; this is not authentication. The server generates read tools and action tools from the model and passes calls through the runtime. Action refusals become MCP errors containing `{ error: { code, message } }`; caught runtime exceptions use the `INTERNAL` code. For local store access, see [Transaction ownership](#transaction-ownership).
+
+## Executing actions
+
+An action definition must include `preconditions`, using `[]` when there are none. Because business rules at the action govern the write path, having no conditions must also be an explicit decision by the model's author.
+
+`execute(actionName, params, { actor })` follows this order:
+
+1. Validate params and load the target under the actor's visibility policy.
+2. Evaluate preconditions.
+3. Run the effects function to obtain an edit plan.
+4. Dry-run the whole plan through the commit's own code, then roll it back.
+5. Check the plan against the ownership declarations.
+6. Write back a nonempty source-backed plan through the adapter.
+7. Commit the local edits and audit entry in one transaction.
+
+Effects describe changes as data and must be pure. `modify` changes properties, `create` creates an ontology-owned object, and `link` / `unlink` change relationships. The gate checks schemas, object existence, and cardinality before the adapter runs. A create-and-link action such as `addOrderNote` commits its local plan atomically. These edits change instances; model definitions are code reviewed and versioned in git.
 
 ## The authority line, checked
 
@@ -36,7 +78,7 @@ The model declares ownership in two places: `owned` on object types and links ma
 | changes both kinds, within one edit or across edits | either | refused: **`MIXED_AUTHORITY`** |
 | creates an object of a source-backed type | either | refused: **`SOURCE_CREATE_UNSUPPORTED`** |
 
-The reasoning, row by row. An undeclared source write would be a local change to source-owned data that never reaches the source — exactly what property 4 forbids. A misdeclared write-back contains nothing that belongs to a source. A mixed plan is refused because this implementation routes plans whole, so an action must sit on one side of the line; split the action if it needs both. (Per-edit routing is future work.) Creating a row at the source is real — write-back could carry it — but this implementation does not demonstrate it, so it refuses rather than half-supports; creation is limited to ontology-owned types. (Also future work.)
+The reasoning, row by row. An undeclared source write would be a local change to source-owned data that never reaches the source — exactly what property 4 forbids. A misdeclared write-back contains nothing that belongs to a source. A mixed plan is refused because this implementation routes plans whole, so an action must sit on one side of the line; split the action if it needs both. Per-edit routing is unsupported. Creating a row at the source is real — write-back could carry it — but this implementation does not demonstrate it, so it refuses rather than half-supports; creation is limited to ontology-owned types.
 
 An empty plan touches neither side of the line: no adapter call, only the audit entry is committed. An action that declares write-back but has no adapter configured is refused with **`NO_WRITEBACK_ADAPTER`**.
 
@@ -58,7 +100,19 @@ A crash inside the write path is audited as **`EXECUTION_CRASHED`** — a storag
 
 The audit write itself must not be a failure point. Params whose values would change when serialized to JSON and back are refused as **`INVALID_PARAMS`** before the model runs. Anything the log still cannot encode is recorded as a `$unserializable` placeholder: a lossy audit entry is better than a missing one.
 
+The audit log sits outside the object graph because its contract differs from that of ordinary business objects. It records refusals and crashes that commit no business edits, retains a record using placeholders for values it cannot encode, and is appended to by the runtime without going through an action. Treating entries as ordinary objects would require exceptions to schema-based refusal and action-gated writes, so this implementation exposes them through a separate administrative view.
+
+**Preconditions and freshness.** Rules see the indexed snapshot plus applied local edits. The source may have changed since indexing; the runtime does not re-check source invariants itself. The adapter must handle that boundary. The demo's [ERP adapter](./examples/orders/erp-adapter.ts) uses a guarded `UPDATE`, allowing the ERP to refuse a cancellation after an order has shipped.
+
+**Concurrency.** Calls and the adapter interface are synchronous. The example assumes a single writer, so no other action interleaves between preflight and commit. An asynchronous adapter or multiple writers would require an explicit concurrency mechanism; neither is implemented here.
+
+**Retries.** There are no idempotency keys or deduplication. `cancelOrder` refuses an already-cancelled order through its own precondition, but that does not guarantee every action or external side effect is safe to retry. A caller-supplied note ID can prevent duplicate local creation; it is not a general retry protocol.
+
+An action instance is identified by its occurrence, not its arguments. Two calls with the same params are separate attempts, each subject to auditing. Adding an invocation ID to params can correlate attempts, but deduplication also requires deciding how checking and recording that ID coordinates with executing side effects. Recording the ID in the log alone does not prevent duplicate execution.
+
 ## Transaction ownership
+
+Rollback has three areas of responsibility. Source dataset versioning and rollback belong to the data platform. This runtime applies an action's local edits and audit entry in one SQLite transaction. Consistency across write-back to external systems is a separate design concern: a local rollback cannot undo changes already delivered to a source. This implementation declares its ordering and failure behavior in the [preceding section](#failure-semantics-in-detail).
 
 One rule is enforced: callers cannot wrap the runtime. `execute()` and `load()` refuse to run inside a caller-opened transaction, because inside one, "committed" would really mean "until the caller rolls the savepoint back" — an applied-and-audited action could be undone after the runtime reported success. This is an atomicity guarantee, not an intrusion defense.
 
@@ -82,3 +136,14 @@ Snapshot semantics, per loaded type: replace the base, reapply the edit layer. T
 - **Refused whole: a load that would orphan an edit.** If a base row disappears while it still carries ontology-owned edits, the entire load is refused and the previous state stands. What happens to that state is a reconciliation decision, and the runtime does not make reconciliation decisions silently: clear the edit or restore the row, then re-load. Clearing the edit is itself an action, so even reconciliation stays inside the write gate.
 - **Refused: an overlay key the model no longer owns.** If the model stops declaring a property ontology-owned while an overlay patch still carries it, the load is refused — that state's fate belongs to explicit schema evolution, not to a refresh.
 - **Refused: a partial snapshot that breaks constraints.** If surviving state on un-loaded types would violate the model's constraints, the whole re-index is refused and rolled back.
+
+## Current limits
+
+These limits describe the current implementation:
+
+- An edit plan cannot mix source-backed and ontology-owned changes; creation is limited to ontology-owned types, as shown in the [authority checks](#the-authority-line-checked).
+- There are no deletes, link properties, or composite keys. The demo leaves order-line quantities in the data layer.
+- `create`, `link`, and `unlink` payloads are checked at runtime; their TypeScript types are not derived from the model. Nested properties follow their Zod schemas and are not made strict by the runtime.
+- Queries use the local SQLite snapshot, with no pagination or result cap. Object sets, pivot, federation, and runtime schema evolution are outside the implemented API. The audit log is a separate administrative view rather than an object in the graph.
+
+The API has changed since v0.3: object reads and `meta.target` use `{ type, pk, properties }`; traversal takes an instance first; actions use `defineAction(objects, definition)`; modifications use `modify(instance, changes)`. Stored rows and audit edit payloads retain their earlier format. Published versions are in the [release notes](https://github.com/gura105/operational-ontology/releases).
