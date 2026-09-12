@@ -147,7 +147,11 @@ export type Edit =
   | { op: 'unlink'; link: string; from: string; to: string }
 
 /** Describe a change to an instance; only execute() applies it. */
-export const modify = <O extends ObjectInstance>(object: O, changes: NoInfer<Partial<O['properties']>>): Edit => ({
+// Infer the properties from the instance. A patch such as { status: 'lost' }
+// must not widen Order's status to make an invalid change fit.
+export const modify = <Instance extends ObjectInstance>(
+  object: Instance, changes: NoInfer<Partial<Instance['properties']>>,
+): Edit => ({
   op: 'modify',
   object: object.type,
   pk: object.pk,
@@ -228,7 +232,7 @@ export interface OntologyDef {
   actions: Record<string, ActionDef<any, any>>
 }
 
-export function defineOntology<T extends OntologyDef>(def: T): T {
+export function defineOntology<Model extends OntologyDef>(def: Model): Model {
   for (const [name, link] of Object.entries(def.links)) {
     for (const end of [link.from, link.to]) {
       if (!Object.hasOwn(def.objects, end)) {
@@ -245,38 +249,51 @@ export function defineOntology<T extends OntologyDef>(def: T): T {
 }
 
 // ── Model-derived types: names, schemas, and the ends of a link ──
+// Examples below use customerOrders (Customer → Order) and manages (Employee → Employee).
+// See tests/types.test.ts for accepted and rejected calls using this model.
 
 type ObjectDefinitions = Record<string, ObjectTypeDef<any>>
-type PropertiesOf<D extends ObjectTypeDef<any>> = z.output<z.ZodObject<D['properties']>>
-export type ObjectName<T extends OntologyDef> = keyof T['objects'] & string
-export type LinkName<T extends OntologyDef> = keyof T['links'] & string
-export type ActionName<T extends OntologyDef> = keyof T['actions'] & string
+type PropertiesOf<Definition extends ObjectTypeDef<any>> = z.output<z.ZodObject<Definition['properties']>>
+export type ObjectName<Model extends OntologyDef> = keyof Model['objects'] & string
+export type LinkName<Model extends OntologyDef> = keyof Model['links'] & string
+export type ActionName<Model extends OntologyDef> = keyof Model['actions'] & string
 export type Direction = 'forward' | 'reverse'
 
-/** Mapping before indexing preserves the tag/properties relationship for unions. */
-export type ObjectOf<T extends OntologyDef, K extends ObjectName<T>> = {
-  [N in K]: ObjectInstance<N, PropertiesOf<T['objects'][N]>>
-}[K]
-export type ParamsOf<T extends OntologyDef, A extends ActionName<T>> =
-  z.input<z.ZodObject<T['actions'][A]['params']>>
+/**
+ * 'Order' → an instance with type: 'Order' and Order's properties.
+ * For 'Customer' | 'Order', build each instance type before forming the union:
+ * a Customer tag must stay paired with Customer properties, and likewise for Order.
+ */
+export type ObjectOf<Model extends OntologyDef, Name extends ObjectName<Model>> = {
+  [TypeName in Name]: ObjectInstance<TypeName, PropertiesOf<Model['objects'][TypeName]>>
+}[Name]
+/** 'cancelOrder' → its input params, e.g. { orderId: string; reason: string }. */
+export type ParamsOf<Model extends OntologyDef, Action extends ActionName<Model>> =
+  z.input<z.ZodObject<Model['actions'][Action]['params']>>
 
-export type LinksFrom<T extends OntologyDef, S extends ObjectName<T>> = {
-  [L in LinkName<T>]: S extends T['links'][L]['from'] | T['links'][L]['to'] ? L : never
-}[LinkName<T>]
-export type LinkDirections<T extends OntologyDef, S extends ObjectName<T>, L extends LinkName<T>> =
-  | (S extends T['links'][L]['from'] ? 'forward' : never)
-  | (S extends T['links'][L]['to'] ? 'reverse' : never)
+/** Customer or Order → 'customerOrders'; Employee → 'manages'. Either endpoint counts. */
+export type LinksFrom<Model extends OntologyDef, Source extends ObjectName<Model>> = {
+  [Link in LinkName<Model>]: Source extends Model['links'][Link]['from'] | Model['links'][Link]['to'] ? Link : never
+}[LinkName<Model>]
+/** customerOrders: Customer → 'forward', Order → 'reverse'. manages: Employee → both. */
+export type LinkDirections<Model extends OntologyDef, Source extends ObjectName<Model>, Link extends LinkName<Model>> =
+  | (Source extends Model['links'][Link]['from'] ? 'forward' : never)
+  | (Source extends Model['links'][Link]['to'] ? 'reverse' : never)
 
-/** The other end. A self-type link returns the same type in either direction. */
-export type LinkTarget<T extends OntologyDef, S extends ObjectName<T>, L extends LinkName<T>> =
-  L extends LinkName<T>
-    ? (S extends T['links'][L]['from'] ? T['links'][L]['to'] : never)
-      | (S extends T['links'][L]['to'] ? T['links'][L]['from'] : never)
+/** customerOrders: Customer → 'Order', Order → 'Customer'. manages: Employee → 'Employee'. */
+export type LinkTarget<Model extends OntologyDef, Source extends ObjectName<Model>, Link extends LinkName<Model>> =
+  Link extends LinkName<Model>
+    ? (Source extends Model['links'][Link]['from'] ? Model['links'][Link]['to'] : never)
+      | (Source extends Model['links'][Link]['to'] ? Model['links'][Link]['from'] : never)
     : never
 
-export type TraverseOptions<T extends OntologyDef, S extends ObjectName<T>, L extends LinkName<T>> =
-  { actor: string } & (Direction extends LinkDirections<T, S, L>
-    ? { direction: LinkDirections<T, S, L> }
-    : { direction?: LinkDirections<T, S, L> })
+/**
+ * If the allowed directions include both choices, direction is required.
+ * Customer + customerOrders → direction?: 'forward'. Employee + manages → direction: Direction.
+ */
+export type TraverseOptions<Model extends OntologyDef, Source extends ObjectName<Model>, Link extends LinkName<Model>> =
+  { actor: string } & (Direction extends LinkDirections<Model, Source, Link>
+    ? { direction: LinkDirections<Model, Source, Link> }
+    : { direction?: LinkDirections<Model, Source, Link> })
 
-export type ObjectFilter<O extends ObjectInstance> = Partial<O['properties']> | ((object: O) => boolean)
+export type ObjectFilter<Instance extends ObjectInstance> = Partial<Instance['properties']> | ((object: Instance) => boolean)

@@ -112,14 +112,14 @@ export const declarations = {
  * could stay virtual; a layer that accepts writes has to own state
  * (edits exist here before, or instead of, the systems of record).
  */
-export class Runtime<T extends OntologyDef = OntologyDef> {
-  readonly ontology: T
+export class Runtime<Model extends OntologyDef = OntologyDef> {
+  readonly ontology: Model
   readonly declarations = declarations
   readonly #db: Database
   readonly #writeback?: WritebackAdapter
   readonly #schemas = new Map<string, z.ZodObject<Properties>>()
 
-  constructor(ontology: T, db: Database, opts: { writeback?: WritebackAdapter } = {}) {
+  constructor(ontology: Model, db: Database, opts: { writeback?: WritebackAdapter } = {}) {
     this.ontology = ontology
     this.#db = db
     this.#writeback = opts.writeback
@@ -165,8 +165,8 @@ export class Runtime<T extends OntologyDef = OntologyDef> {
    * "Re-indexing vs edits" in IMPLEMENTATION.md.
    */
   load(snapshot: {
-    objects?: { [K in ObjectName<T>]?: Record<string, unknown>[] }
-    links?: { [L in LinkName<T>]?: Array<[from: string, to: string]> }
+    objects?: { [K in ObjectName<Model>]?: Record<string, unknown>[] }
+    links?: { [Link in LinkName<Model>]?: Array<[from: string, to: string]> }
   }): void {
     this.#refuseOpenTransaction('load')
     const insertObject = this.#db.prepare('INSERT INTO objects (type, pk, data) VALUES (?, ?, ?)')
@@ -258,24 +258,26 @@ export class Runtime<T extends OntologyDef = OntologyDef> {
 
   // ── Read side: query the model, not the tables — and always as someone ──
 
-  get<K extends ObjectName<T>>(type: K, pk: string, opts: { actor: string }): ObjectOf<T, K> | undefined {
-    return this.#read<ObjectOf<T, K>>(type, pk, opts.actor)
+  get<K extends ObjectName<Model>>(type: K, pk: string, opts: { actor: string }): ObjectOf<Model, K> | undefined {
+    return this.#read<ObjectOf<Model, K>>(type, pk, opts.actor)
   }
 
-  search<K extends ObjectName<T>>(
+  search<K extends ObjectName<Model>>(
     type: K,
-    opts: { actor: string; filter?: ObjectFilter<ObjectOf<T, K>> },
-  ): ObjectOf<T, K>[] {
-    return this.#scan<ObjectOf<T, K>>(type, opts.actor, opts.filter)
+    opts: { actor: string; filter?: ObjectFilter<ObjectOf<Model, K>> },
+  ): ObjectOf<Model, K>[] {
+    return this.#scan<ObjectOf<Model, K>>(type, opts.actor, opts.filter)
   }
 
   /** Follow a link from an instance. A self-type link needs an explicit direction. */
-  // Infer source, then link; later arguments must not widen earlier choices.
-  traverse<S extends ObjectName<T>, L extends LinksFrom<T, NoInfer<S>>>(
-    source: ObjectOf<T, S>,
-    linkName: L,
-    opts: TraverseOptions<T, NoInfer<S>, NoInfer<L>>,
-  ): ObjectOf<T, LinkTarget<T, S, L>>[] {
+  // Infer the source, then the link; check options against those choices.
+  // NoInfer stops a Customer from becoming Customer | Employee to accept 'manages',
+  // or Customer | Order to accept 'reverse' on customerOrders.
+  traverse<Source extends ObjectName<Model>, Link extends LinksFrom<Model, NoInfer<Source>>>(
+    source: ObjectOf<Model, Source>,
+    linkName: Link,
+    opts: TraverseOptions<Model, NoInfer<Source>, NoInfer<Link>>,
+  ): ObjectOf<Model, LinkTarget<Model, Source, Link>>[] {
     if (
       !source || typeof source.type !== 'string' || typeof source.pk !== 'string' ||
       !source.properties || typeof source.properties !== 'object' || Array.isArray(source.properties)
@@ -303,19 +305,19 @@ export class Runtime<T extends OntologyDef = OntologyDef> {
       .prepare(`SELECT ${select} AS pk FROM links WHERE name = ? AND ${where} = ? ORDER BY pk`)
       .all(linkName, source.pk) as { pk: string }[]
     return rows
-      .map((r) => this.#read<ObjectOf<T, LinkTarget<T, S, L>>>(targetType, r.pk, opts.actor))
+      .map((r) => this.#read<ObjectOf<Model, LinkTarget<Model, Source, Link>>>(targetType, r.pk, opts.actor))
       .filter((o) => o !== undefined)
   }
 
   /** Query-time aggregation over the indexed objects. Nothing is precomputed. */
-  aggregate<K extends ObjectName<T>>(
+  aggregate<K extends ObjectName<Model>>(
     type: K,
-    opts: { actor: string } & AggregateOptions<ObjectOf<T, K>>,
+    opts: { actor: string } & AggregateOptions<ObjectOf<Model, K>>,
   ): Record<string, { count: number; sum?: number }> {
     // Accumulate in a Map: group keys are data, and data named "__proto__"
     // must not walk — let alone pollute — the prototype chain.
     const out = new Map<string, { count: number; sum?: number }>()
-    for (const obj of this.#scan<ObjectOf<T, K>>(type, opts.actor, opts.filter)) {
+    for (const obj of this.#scan<ObjectOf<Model, K>>(type, opts.actor, opts.filter)) {
       const key = opts.groupBy(obj)
       let bucket = out.get(key)
       if (!bucket) {
@@ -338,7 +340,7 @@ export class Runtime<T extends OntologyDef = OntologyDef> {
    * audit entry. Validity precedes authority: a plan the store would refuse
    * is INVALID_EDITS, whatever else it is.
    */
-  execute<A extends ActionName<T>>(actionName: A, params: ParamsOf<T, A>, opts: { actor: string }): ActionResult {
+  execute<A extends ActionName<Model>>(actionName: A, params: ParamsOf<Model, A>, opts: { actor: string }): ActionResult {
     this.#refuseOpenTransaction('execute')
     // From here on the params are raw input: the schema, not the type, decides.
     const raw = params as Record<string, unknown>
@@ -532,7 +534,7 @@ export class Runtime<T extends OntologyDef = OntologyDef> {
     return { ok: true, edits }
   }
 
-  auditLog(filter: { action?: ActionName<T>; status?: 'applied' | 'rejected'; target?: string } = {}): AuditEntry[] {
+  auditLog(filter: { action?: ActionName<Model>; status?: 'applied' | 'rejected'; target?: string } = {}): AuditEntry[] {
     const rows = this.#db.prepare('SELECT * FROM audit_log ORDER BY seq').all() as Array<{
       seq: number
       ts: string
@@ -840,11 +842,11 @@ function safeJson(value: unknown): string {
   return JSON.stringify({ $unserializable: String(value) })
 }
 
-export function createRuntime<T extends OntologyDef>(
-  ontology: T,
+export function createRuntime<Model extends OntologyDef>(
+  ontology: Model,
   db: Database,
   opts: { writeback?: WritebackAdapter } = {},
-): Runtime<T> {
+): Runtime<Model> {
   return new Runtime(ontology, db, opts)
 }
 
