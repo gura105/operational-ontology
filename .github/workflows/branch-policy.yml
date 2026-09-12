@@ -1,0 +1,34 @@
+name: Branch policy
+
+on:
+  pull_request_target:
+    types: [opened, synchronize, reopened, edited, ready_for_review]
+
+permissions:
+  contents: read
+
+jobs:
+  branch-policy:
+    runs-on: ubuntu-latest
+    timeout-minutes: 2
+    steps:
+      # Read event metadata only: never check out or execute the PR's code here.
+      - name: Check the merge destination
+        env:
+          REPOSITORY: ${{ github.repository }}
+        run: |
+          node --input-type=module <<'JS'
+          import { readFileSync } from 'node:fs';
+          const { pull_request: pr } = JSON.parse(readFileSync(process.env.GITHUB_EVENT_PATH, 'utf8'));
+          const sameRepo = pr.head.repo?.full_name === process.env.REPOSITORY;
+          if (pr.base.ref === 'main') {
+            if (!sameRepo || pr.head.ref !== 'next') {
+              throw new Error('Target next for development. Only this repository\'s next may merge into main.');
+            }
+          } else if (pr.base.ref !== 'next') {
+            throw new Error('Development PRs target next; release PRs target main.');
+          } else if (pr.head.ref === 'main' && !sameRepo) {
+            throw new Error('main → next is reserved for synchronization within this repository.');
+          }
+          console.log(`Allowed: ${pr.head.label} → ${pr.base.ref}`);
+          JS
