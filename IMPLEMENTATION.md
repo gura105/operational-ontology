@@ -6,6 +6,25 @@ The [README](./README.md) defines the pattern and summarizes this repository's d
 
 Every refusal named here is machine-readable: the action returns `{ ok: false, error: { code, message } }`, and the attempt is recorded in the audit log.
 
+## Instances and traversal
+
+`model.ts` contains definitions and model-derived types; `core.ts` interprets them. Runtime object values are read snapshots shaped as `{ type, pk, properties }`. Identity is `(type, pk)`; `pk` comes from the declared primary key, even when that property is not named `id`. Business properties named `type`, `pk`, or `properties` remain nested without collisions. Mutating a snapshot does not write the store.
+
+`get`, `search`, and `traverse` return instances. Visibility, predicate filters, aggregation callbacks, action contexts, and `meta.target` receive instances too. Equality filters, `modify` changes, `create` data, and indexing rows still use business properties directly. `defineAction(objects, …)` derives `ctx.object` from its `object` name and `ctx.params` from the parameter schema. `modify(instance, changes)` produces the existing edit data; it performs no write itself. `create`, `link`, and `unlink` retain their runtime-checked payloads.
+
+`traverse(source, linkName, { actor, direction? })` accepts a full instance, with no primary-key-only or reference-only overload. The link definition determines direction:
+
+| Source type matches | Direction | Result type |
+| --- | --- | --- |
+| `from` only | `forward`, optional | `to` |
+| `to` only | `reverse`, optional | `from` |
+| Both ends | `forward` or `reverse`, required | The same object type |
+| Neither end | Invalid link for this source | — |
+
+The rule depends on the declared types, not the stored edges. Results are always arrays, including for one-to-many reverse traversal. Return types depend on source and link; optional direction does not widen them. Narrow a union of source types using `type` before traversing when its ends differ. The instance is a snapshot, so traversal re-reads `(type, pk)` with the caller's actor, checks visibility at both ends, and returns an empty array for a missing or hidden source. It ignores the supplied properties for these checks. Invalid source shape, link, or direction throws.
+
+MCP reads serialize the same shape. Traversal tools take `{ source: { type, pk, properties }, direction? }`, with direction required in the schema for same-type links. The generated schemas and runtime validate dynamic inputs; the MCP adapter contains the type assertion for this boundary. Typed application calls have no permissive overload for arbitrary strings. Stored rows and audit edit payloads keep their existing format.
+
 ## The authority line, checked
 
 The model declares ownership in two places: `owned` on object types and links marks ontology-owned state, and `writeback: true` on an action marks its changes source-backed. The runtime classifies every edit plan against the `owned` declarations and refuses any plan that contradicts its action's declaration:

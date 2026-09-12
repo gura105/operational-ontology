@@ -113,7 +113,7 @@ https://github.com/user-attachments/assets/28327062-e09f-4103-943e-434a0e55b327
 
 ## The pattern
 
-The model defines three kinds of types: object types, link types, and action types. At runtime their instances — objects, links, and applied actions — live in the store. The remaining two concepts connect the pairs: edits are the changes to objects and links that an action instance describes, and the audit log is where the action instances themselves are recorded. All five concepts are defined as data and interpreted by a runtime (`src/core.ts`):
+The model defines three kinds of types: object types, link types, and action types. At runtime their instances — objects, links, and applied actions — live in the store. The remaining two concepts connect the pairs: edits are the changes to objects and links that an action instance describes, and the audit log is where the action instances themselves are recorded. All five concepts are defined as data and interpreted by a runtime (`src/core.ts`), with the definitions and derived types in `src/model.ts`:
 
 ```ts
 const objects = {
@@ -158,6 +158,19 @@ const ontology = defineOntology({
 ```
 
 Because the definition is a plain value, it can be enumerated, diffed, and versioned; the MCP tool surface above is derived from it mechanically.
+
+`defineAction(objects, …)` gives the rule callbacks their object and parameter types. `modify(object, changes)` derives identity from the instance and checks the changed properties. Reads return the same `{ type, pk, properties }` shape used by rules, visibility predicates, query callbacks, and the write-back adapter's `meta.target`:
+
+```ts
+const actor = { actor: 'user:hq' }
+const customer = rt.get('Customer', 'N-C01', actor)!
+// { type: 'Customer', pk: 'N-C01', properties: { id: 'N-C01', name: 'Yamada', … } }
+const orders = rt.traverse(customer, 'customerOrders', actor) // Order instances
+const customers = rt.traverse(orders[0], 'customerOrders', actor) // Customer instances
+console.log(orders[0].properties.status)
+```
+
+The source instance determines the available links and directions in editor hints. For `Customer → Order`, either end determines the direction, so it can be omitted. For `Employee → Employee`, pass `{ actor, direction: 'forward' }` for subordinates or `{ actor, direction: 'reverse' }` for managers, assuming the link is defined from manager to subordinate. That choice is required by both TypeScript and the runtime, even if the particular employee has edges in only one direction. Only the link's existing name is needed; there are no directional aliases. MCP traversal tools accept the instance as `source` and follow the same rules. [Instance and traversal details](./IMPLEMENTATION.md#instances-and-traversal).
 
 `Runtime.execute()` is the only operational write path the API exposes. Every call, applied or refused, creates one action instance and records it in the audit log. The steps always run in this order:
 
@@ -237,7 +250,7 @@ Scope is frozen for v0 so the reference implementation stays small enough to rea
 
 **Why not OWL/RDF?** Those model what things *are* (semantic). Half of this pattern is what you can *do* (kinetic): actions, preconditions, audit, write-back. A reasoner cannot cancel an order.
 
-**Why TypeScript definitions instead of YAML?** Because business rules are code, and rule-expression languages embedded in YAML tend to grow into ad-hoc rule engines. TypeScript object literals keep the model enumerable while the rules stay ordinary typed code. (The model types the runtime's call sites — object, link, and action names, instance shapes, action params — but not yet the rule contexts inside actions; see [Status](#status).) Structure as data, rules as functions — the same split Foundry makes between Ontology Manager and Functions.
+**Why TypeScript definitions instead of YAML?** Because business rules are code, and rule-expression languages embedded in YAML tend to grow into ad-hoc rule engines. TypeScript object literals keep the model enumerable while the rules stay ordinary typed code. (The model types names, instances, action params, rule contexts, and `modify` payloads; see [Status](#status).) Structure as data, rules as functions — the same split Foundry makes between Ontology Manager and Functions.
 
 **What about transactions and rollback?** Three domains, three answers. Dataset versioning and rollback belong to the data layer (in Foundry: catalog transactions and branching). Atomic application of an action's edits belongs to this layer (implemented here as a real SQLite transaction). The consistency mechanism for cross-system write-back is implementation-defined; the pattern requires it to be declared, and this implementation declares write-back-first ordering (see [Failure semantics](#failure-semantics)).
 
@@ -269,7 +282,7 @@ Two design choices follow. `preconditions` is a required key, and an empty list 
 
 ## Status
 
-v0.3 — reference implementation. This version types the runtime's call sites by the model: object, link, and action names complete and check, instance shapes come from the property schemas, `traverse` resolves its result from the link's ends and the direction, and `execute` checks params against the action's parameter schema. A definition typed only as `OntologyDef` keeps the untyped contract. Earlier versions are described in the [release notes](https://github.com/gura105/operational-ontology/releases); v0.2 subtracted the mechanisms that enforced vows beyond the four properties.
+Reference implementation. The current API uses tagged object instances, derives traversal results from the source type and link, and types action callbacks through `defineAction(objects, …)`. Keep the inferred model type to retain these checks; annotating the definition as `OntologyDef` erases its specific names and schemas. The instance shape, `traverse` arguments, `defineAction` arguments, and `modify` arguments have changed since v0.3. Earlier versions are described in the [release notes](https://github.com/gura105/operational-ontology/releases).
 
 Current limitations, which are also the worklist for the next version:
 
@@ -277,7 +290,8 @@ Current limitations, which are also the worklist for the next version:
 - Creation is limited to ontology-owned types; source-backed creation carried by write-back is not demonstrated yet.
 - No deletes.
 - No link properties or composite keys.
-- Rule contexts are not typed by the model: `ctx.object` and edit payloads are untyped inside actions, while the runtime's call sites are.
+- `create`, `link`, and `unlink` edits are checked at runtime; their payloads are not derived from the model at compile time.
+- Object sets and pivot are deferred.
 - Nested properties are not validated strictly.
 
 The mechanics behind this implementation's declarations are in the [implementation notes](./IMPLEMENTATION.md). Built and verified with Node 24, better-sqlite3, zod 4, MCP SDK 1.29.
