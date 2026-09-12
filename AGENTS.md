@@ -30,7 +30,7 @@ Repository administration changes that leave the published application and its d
 
 - `main` and `next` require a PR and successful `test` and `branch-policy` checks, and refuse deletion and force pushes.
 - Only this repository's `next` may target `main`. `main → next` is reserved for synchronization.
-- Version tags (`v*`) cannot be changed or deleted. New version tags are created by GitHub Actions through the release workflow.
+- Version tags (`v*`) cannot be changed or deleted. Use the Release workflow to create new tags; this creation path is an instruction, not a GitHub permission restriction.
 - The Release workflow is manual and its publishing environment accepts only `main`.
 
 GitHub settings are managed through `gh`. Agent instructions live here; `CLAUDE.md` imports this file.
