@@ -16,7 +16,7 @@
  */
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js'
 import { z } from 'zod'
-import type { Runtime } from './core.js'
+import type { ObjectInstance, Runtime, TraverseOptions, OntologyDef } from './core.js'
 import pkg from '../package.json' with { type: 'json' }
 
 export function buildMcpServer(rt: Runtime, opts: { agent?: string } = {}): McpServer {
@@ -121,8 +121,8 @@ export function buildMcpServer(rt: Runtime, opts: { agent?: string } = {}): McpS
           rt.aggregate(typeName, {
             actor: actorOf(extra),
             filter: args.filter ? prune(args.filter) : undefined,
-            groupBy: (o: Record<string, unknown>) => String(o[args.group_by]),
-            ...(args.sum ? { sum: (o: Record<string, unknown>) => Number(o[args.sum!] ?? 0) } : {}),
+            groupBy: (o) => String(o.properties[args.group_by]),
+            ...(args.sum ? { sum: (o) => Number(o.properties[args.sum!] ?? 0) } : {}),
           }),
         )
       }),
@@ -135,15 +135,27 @@ export function buildMcpServer(rt: Runtime, opts: { agent?: string } = {}): McpS
       {
         description:
           `Traverse the ${link.from} → ${link.to} link "${linkName}" (${link.kind}). ` +
-          `direction=forward: pass a ${link.from} pk, get linked ${link.to} objects. ` +
-          `direction=reverse: pass a ${link.to} pk, get linked ${link.from} objects.`,
+          'Pass an instance returned by get or search; its properties are a snapshot, not authority. ' +
+          (link.from === link.to
+            ? 'Choose direction=forward or reverse for this self-type link.'
+            : 'Direction is inferred from source.type; an explicit direction must agree.'),
         inputSchema: {
-          pk: z.string(),
-          direction: z.enum(['forward', 'reverse']).default('forward'),
+          source: z.object({
+            type: z.enum([link.from, link.to]),
+            pk: z.string(),
+            properties: z.record(z.string(), z.unknown()),
+          }),
+          direction: link.from === link.to
+            ? z.enum(['forward', 'reverse'])
+            : z.enum(['forward', 'reverse']).optional(),
         },
       },
-      guarded(async (args: { pk: string; direction: 'forward' | 'reverse' }, extra: { sessionId?: string }) =>
-        asJson(rt.traverse(linkName, args.pk, { actor: actorOf(extra), direction: args.direction }))),
+      guarded(async (args: { source: ObjectInstance; direction?: 'forward' | 'reverse' }, extra: { sessionId?: string }) =>
+        // Names are dynamic here. The runtime checks the instance, link, and
+        // direction together; no permissive overload is needed by typed callers.
+        asJson(rt.traverse(args.source, linkName, {
+          actor: actorOf(extra), direction: args.direction,
+        } as TraverseOptions<OntologyDef, string, string>))),
     )
   }
 

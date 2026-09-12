@@ -116,39 +116,41 @@ https://github.com/user-attachments/assets/2b811ee7-bff2-4694-b3bf-bf0f6ccc85d5
 モデルが定義する型は、オブジェクト型、リンク型、アクション型の 3 種類です。実行時には、それぞれのインスタンス — オブジェクト、リンク、適用されたアクション — がストアに格納されます。他にも型とインスタンスの対をつなぐ概念としてedits（編集）があります。これはアクションのインスタンスが記述する「オブジェクトとリンクへの変更」です。監査ログは、アクションのインスタンスそのものが記録される場所です。これら 5 つの概念はすべてデータとして定義され、ランタイム（`src/core.ts`）が解釈します。
 
 ```ts
+const objects = {
+  Customer: defineObject({
+    primaryKey: 'id',
+    properties: { id: z.string(), name: z.string(), region: z.string() },
+  }),
+  Order: defineObject({
+    primaryKey: 'id',
+    properties: {
+      id: z.string(),
+      status: z.enum(['pending', 'shipped', 'cancelled']),
+      total: z.number().int(), // minor units — お金は float ではない
+      assignee: z.string().nullable(),
+    },
+    owned: { assignee: null },                       // オントロジー自身の状態、と宣言する
+    source: 'north.tbl_order ∪ south.SALES_ORDER',   // 物理データが先にある
+  }),
+}
+
 const ontology = defineOntology({
   name: 'orders',
-  objects: {
-    Customer: defineObject({
-      primaryKey: 'id',
-      properties: { id: z.string(), name: z.string(), region: z.string() },
-    }),
-    Order: defineObject({
-      primaryKey: 'id',
-      properties: {
-        id: z.string(),
-        status: z.enum(['pending', 'shipped', 'cancelled']),
-        total: z.number().int(), // minor units — お金は float ではない
-        assignee: z.string().nullable(),
-      },
-      owned: { assignee: null },                       // オントロジー自身の状態、と宣言する
-      source: 'north.tbl_order ∪ south.SALES_ORDER',   // 物理データが先にある
-    }),
-  },
+  objects,
   links: {
     customerOrders: defineLink({ from: 'Customer', to: 'Order', kind: 'one-to-many' }),
   },
   actions: {
-    cancelOrder: defineAction({
+    cancelOrder: defineAction(objects, {
       object: 'Order',
       targetParam: 'orderId',
       params: { orderId: z.string(), reason: z.string().min(1) },
       preconditions: [
-        ({ object }) => object.status === 'shipped'
-          ? reject('SHIPPED_ORDER_CANNOT_BE_CANCELLED', `order ${object.id} has already shipped`)
+        ({ object }) => object.properties.status === 'shipped'
+          ? reject('SHIPPED_ORDER_CANNOT_BE_CANCELLED', `order ${object.pk} has already shipped`)
           : undefined,
       ],
-      effects: ({ object }) => [modify('Order', object.id, { status: 'cancelled' })],
+      effects: ({ object }) => [modify(object, { status: 'cancelled' })],
       writeback: true,
     }),
   },

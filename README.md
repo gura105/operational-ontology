@@ -116,39 +116,41 @@ https://github.com/user-attachments/assets/28327062-e09f-4103-943e-434a0e55b327
 The model defines three kinds of types: object types, link types, and action types. At runtime their instances — objects, links, and applied actions — live in the store. The remaining two concepts connect the pairs: edits are the changes to objects and links that an action instance describes, and the audit log is where the action instances themselves are recorded. All five concepts are defined as data and interpreted by a runtime (`src/core.ts`):
 
 ```ts
+const objects = {
+  Customer: defineObject({
+    primaryKey: 'id',
+    properties: { id: z.string(), name: z.string(), region: z.string() },
+  }),
+  Order: defineObject({
+    primaryKey: 'id',
+    properties: {
+      id: z.string(),
+      status: z.enum(['pending', 'shipped', 'cancelled']),
+      total: z.number().int(), // minor units — money is not a float
+      assignee: z.string().nullable(),
+    },
+    owned: { assignee: null },                       // the ontology's own state, declared
+    source: 'north.tbl_order ∪ south.SALES_ORDER',   // physical data comes first
+  }),
+}
+
 const ontology = defineOntology({
   name: 'orders',
-  objects: {
-    Customer: defineObject({
-      primaryKey: 'id',
-      properties: { id: z.string(), name: z.string(), region: z.string() },
-    }),
-    Order: defineObject({
-      primaryKey: 'id',
-      properties: {
-        id: z.string(),
-        status: z.enum(['pending', 'shipped', 'cancelled']),
-        total: z.number().int(), // minor units — money is not a float
-        assignee: z.string().nullable(),
-      },
-      owned: { assignee: null },                       // the ontology's own state, declared
-      source: 'north.tbl_order ∪ south.SALES_ORDER',   // physical data comes first
-    }),
-  },
+  objects,
   links: {
     customerOrders: defineLink({ from: 'Customer', to: 'Order', kind: 'one-to-many' }),
   },
   actions: {
-    cancelOrder: defineAction({
+    cancelOrder: defineAction(objects, {
       object: 'Order',
       targetParam: 'orderId',
       params: { orderId: z.string(), reason: z.string().min(1) },
       preconditions: [
-        ({ object }) => object.status === 'shipped'
-          ? reject('SHIPPED_ORDER_CANNOT_BE_CANCELLED', `order ${object.id} has already shipped`)
+        ({ object }) => object.properties.status === 'shipped'
+          ? reject('SHIPPED_ORDER_CANNOT_BE_CANCELLED', `order ${object.pk} has already shipped`)
           : undefined,
       ],
-      effects: ({ object }) => [modify('Order', object.id, { status: 'cancelled' })],
+      effects: ({ object }) => [modify(object, { status: 'cancelled' })],
       writeback: true,
     }),
   },

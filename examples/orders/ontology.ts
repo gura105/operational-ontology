@@ -6,75 +6,77 @@
 import { z } from 'zod'
 import { create, defineAction, defineLink, defineObject, defineOntology, link, modify, reject } from '../../src/core.js'
 
+const objects = {
+  Customer: defineObject({
+    description: 'A customer of the merged company',
+    primaryKey: 'id',
+    properties: {
+      id: z.string(),
+      name: z.string(),
+      region: z.string(),
+    },
+    source: 'north.tbl_cust ∪ south.CUSTOMER_MASTER',
+  }),
+
+  Order: defineObject({
+    description: 'A sales order, unified across both legacy systems',
+    primaryKey: 'id',
+    // Row-level visibility, attached to the model: a sales rep sees only
+    // the orders of their own legacy system; hq, agents, and infrastructure
+    // see everything. Types without a visibility slot are visible to all
+    // (fail-open — declared in the README).
+    visibility: ({ object, actor }) =>
+      actor === `user:${object.properties.sourceSystem}-sales` ||
+      actor === 'user:hq' ||
+      actor.startsWith('agent:') ||
+      actor.startsWith('system:'),
+    properties: {
+      id: z.string(),
+      // Source-backed: both legacy systems master this value.
+      status: z.enum(['pending', 'shipped', 'cancelled']),
+      total: z.number().int(), // minor units — money is not a float
+      assignee: z.string().nullable(),
+      // Which system of record this order lives in — write-back routes on this.
+      sourceSystem: z.enum(['north', 'south']),
+      sourceId: z.string(),
+    },
+    // Authority, declared property by property: neither legacy system has
+    // an assignee column, so the ontology owns it — it starts null, no
+    // snapshot may supply it, and it survives re-indexing. Every other
+    // property is source-backed: the snapshot speaks, write-back governs.
+    owned: { assignee: null },
+    source: 'north.tbl_order ∪ south.SALES_ORDER',
+  }),
+
+  Product: defineObject({
+    description: 'An item from the ERP item master',
+    primaryKey: 'id',
+    properties: {
+      id: z.string(),
+      name: z.string(),
+      stock: z.number(),
+    },
+    source: 'south.ITEM_MASTER',
+  }),
+
+  Note: defineObject({
+    description: 'A triage note — state no source system has a table for',
+    primaryKey: 'id',
+    // The whole type is ontology-owned, existence included: no source
+    // supplies notes, actions create them, and they survive re-indexing.
+    owned: true,
+    properties: {
+      id: z.string(),
+      text: z.string(),
+      author: z.string(),
+    },
+  }),
+}
+
 export const orders = defineOntology({
   name: 'orders',
 
-  objects: {
-    Customer: defineObject({
-      description: 'A customer of the merged company',
-      primaryKey: 'id',
-      properties: {
-        id: z.string(),
-        name: z.string(),
-        region: z.string(),
-      },
-      source: 'north.tbl_cust ∪ south.CUSTOMER_MASTER',
-    }),
-
-    Order: defineObject({
-      description: 'A sales order, unified across both legacy systems',
-      primaryKey: 'id',
-      // Row-level visibility, attached to the model: a sales rep sees only
-      // the orders of their own legacy system; hq, agents, and infrastructure
-      // see everything. Types without a visibility slot are visible to all
-      // (fail-open — declared in the README).
-      visibility: ({ object, actor }) =>
-        actor === `user:${String(object.sourceSystem)}-sales` ||
-        actor === 'user:hq' ||
-        actor.startsWith('agent:') ||
-        actor.startsWith('system:'),
-      properties: {
-        id: z.string(),
-        // Source-backed: both legacy systems master this value.
-        status: z.enum(['pending', 'shipped', 'cancelled']),
-        total: z.number().int(), // minor units — money is not a float
-        assignee: z.string().nullable(),
-        // Which system of record this order lives in — write-back routes on this.
-        sourceSystem: z.enum(['north', 'south']),
-        sourceId: z.string(),
-      },
-      // Authority, declared property by property: neither legacy system has
-      // an assignee column, so the ontology owns it — it starts null, no
-      // snapshot may supply it, and it survives re-indexing. Every other
-      // property is source-backed: the snapshot speaks, write-back governs.
-      owned: { assignee: null },
-      source: 'north.tbl_order ∪ south.SALES_ORDER',
-    }),
-
-    Product: defineObject({
-      description: 'An item from the ERP item master',
-      primaryKey: 'id',
-      properties: {
-        id: z.string(),
-        name: z.string(),
-        stock: z.number(),
-      },
-      source: 'south.ITEM_MASTER',
-    }),
-
-    Note: defineObject({
-      description: 'A triage note — state no source system has a table for',
-      primaryKey: 'id',
-      // The whole type is ontology-owned, existence included: no source
-      // supplies notes, actions create them, and they survive re-indexing.
-      owned: true,
-      properties: {
-        id: z.string(),
-        text: z.string(),
-        author: z.string(),
-      },
-    }),
-  },
+  objects,
 
   links: {
     customerOrders: defineLink({
@@ -109,7 +111,7 @@ export const orders = defineOntology({
      * the same gate. Cancellation is written back to the originating legacy
      * system.
      */
-    cancelOrder: defineAction({
+    cancelOrder: defineAction(objects, {
       description: 'Cancel an order. Shipped orders cannot be cancelled.',
       object: 'Order',
       targetParam: 'orderId',
@@ -119,15 +121,15 @@ export const orders = defineOntology({
       },
       preconditions: [
         ({ object }) =>
-          object.status === 'shipped'
-            ? reject('SHIPPED_ORDER_CANNOT_BE_CANCELLED', `order ${object.id} has already shipped`)
+          object.properties.status === 'shipped'
+            ? reject('SHIPPED_ORDER_CANNOT_BE_CANCELLED', `order ${object.pk} has already shipped`)
             : undefined,
         ({ object }) =>
-          object.status === 'cancelled'
-            ? reject('ORDER_ALREADY_CANCELLED', `order ${object.id} is already cancelled`)
+          object.properties.status === 'cancelled'
+            ? reject('ORDER_ALREADY_CANCELLED', `order ${object.pk} is already cancelled`)
             : undefined,
       ],
-      effects: ({ object }) => [modify('Order', object.id as string, { status: 'cancelled' })],
+      effects: ({ object }) => [modify(object, { status: 'cancelled' })],
       writeback: true,
     }),
 
@@ -138,7 +140,7 @@ export const orders = defineOntology({
      * assignment has no business changing it. Reassignment overwrites the
      * previous assignee; every attempt, either way, is on the audit log.
      */
-    assignOrder: defineAction({
+    assignOrder: defineAction(objects, {
       description: 'Assign a pending order to a person for fulfilment.',
       object: 'Order',
       targetParam: 'orderId',
@@ -148,11 +150,11 @@ export const orders = defineOntology({
       },
       preconditions: [
         ({ object }) =>
-          object.status !== 'pending'
-            ? reject('ORDER_NOT_ASSIGNABLE', `order ${object.id} is ${object.status}, only pending orders can be assigned`)
+          object.properties.status !== 'pending'
+            ? reject('ORDER_NOT_ASSIGNABLE', `order ${object.pk} is ${object.properties.status}, only pending orders can be assigned`)
             : undefined,
       ],
-      effects: ({ object, params }) => [modify('Order', object.id as string, { assignee: params.assignee })],
+      effects: ({ object, params }) => [modify(object, { assignee: params.assignee })],
     }),
 
     /**
@@ -164,7 +166,7 @@ export const orders = defineOntology({
      * (see "What if an agent retries?" in the README — an invocation-supplied
      * id is also the minimal idempotency hook).
      */
-    addOrderNote: defineAction({
+    addOrderNote: defineAction(objects, {
       description: 'File a triage note against an order.',
       object: 'Order',
       targetParam: 'orderId',
@@ -176,12 +178,12 @@ export const orders = defineOntology({
       },
       preconditions: [],
       effects: ({ object, params }) => [
-        create('Note', params.noteId as string, {
+        create('Note', params.noteId, {
           id: params.noteId,
           text: params.text,
           author: params.author,
         }),
-        link('orderNotes', object.id as string, params.noteId as string),
+        link('orderNotes', object.pk, params.noteId),
       ],
     }),
   },

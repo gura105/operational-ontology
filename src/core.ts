@@ -26,8 +26,9 @@ import type { Database } from 'better-sqlite3'
 
 import { isPlainJson, reject } from './model.js'
 import type {
-  ActionCtx, ActionDef, ActionName, Direction, Edit, LinkEnd, LinkName, LinkTypeDef,
-  ObjectName, ObjectOf, ObjectTypeDef, OntologyDef, ParamsOf, Properties, Violation,
+  ActionCtx, ActionDef, ActionName, Edit, ObjectFilter, ObjectInstance, ObjectName,
+  ObjectOf, ObjectTypeDef, OntologyDef, ParamsOf, Properties, LinkName, LinksFrom, LinkTarget,
+  TraverseOptions, Violation,
 } from './model.js'
 export * from './model.js'
 
@@ -49,7 +50,7 @@ export interface WritebackAdapter {
       action: string
       actor: string
       /** The action's target, as the runtime loaded it — routing material. */
-      target: { type: string; pk: string; object: Record<string, unknown> }
+      target: ObjectInstance
     },
   ): void
 }
@@ -85,8 +86,8 @@ export interface AuditEntry {
   edits: Edit[] | null
 }
 
-export interface AggregateOptions<O> {
-  filter?: Partial<O> | ((o: O) => boolean)
+export interface AggregateOptions<O extends ObjectInstance> {
+  filter?: ObjectFilter<O>
   groupBy: (o: O) => string
   sum?: (o: O) => number
 }
@@ -241,7 +242,7 @@ export class Runtime<T extends OntologyDef = OntologyDef> {
           `overlay for ${type}/${pk} carries "${stale.join('", "')}" which the model no longer declares ontology-owned`,
         )
       }
-      const base = this.#fetch<Record<string, unknown>>(type, pk)
+      const base = this.#fetch(type, pk)
       if (!base) {
         throw new Error(
           `re-index conflict: ${type}/${pk} carries ontology-owned edits (${Object.keys(changes).join(', ')}) ` +
@@ -263,35 +264,47 @@ export class Runtime<T extends OntologyDef = OntologyDef> {
 
   search<K extends ObjectName<T>>(
     type: K,
-    opts: { actor: string; filter?: Partial<ObjectOf<T, K>> | ((o: ObjectOf<T, K>) => boolean) },
+    opts: { actor: string; filter?: ObjectFilter<ObjectOf<T, K>> },
   ): ObjectOf<T, K>[] {
     return this.#scan<ObjectOf<T, K>>(type, opts.actor, opts.filter)
   }
 
-  /** Follow a link from one object to its neighbours. Both directions are traversable. */
-  traverse<L extends LinkName<T>, O extends { actor: string; direction?: Direction }>(
+  /** Follow a link from an instance. A self-type link needs an explicit direction. */
+  // Infer source, then link; later arguments must not widen earlier choices.
+  traverse<S extends ObjectName<T>, L extends LinksFrom<T, NoInfer<S>>>(
+    source: ObjectOf<T, S>,
     linkName: L,
-    pk: string,
-    opts: O,
-  ): ObjectOf<T, LinkEnd<T, L, O>>[] {
-    type Target = ObjectOf<T, LinkEnd<T, L, O>>
-    const link: LinkTypeDef | undefined = Object.hasOwn(this.ontology.links, linkName)
-      ? this.ontology.links[linkName]
-      : undefined
+    opts: TraverseOptions<T, NoInfer<S>, NoInfer<L>>,
+  ): ObjectOf<T, LinkTarget<T, S, L>>[] {
+    if (
+      !source || typeof source.type !== 'string' || typeof source.pk !== 'string' ||
+      !source.properties || typeof source.properties !== 'object' || Array.isArray(source.properties)
+    ) {
+      throw new Error('traverse() requires an object instance with type, pk, and properties')
+    }
+    const link = Object.hasOwn(this.ontology.links, linkName) ? this.ontology.links[linkName] : undefined
     if (!link) throw new Error(`unknown link type "${linkName}"`)
-    const [where, select, targetType, originType] =
-      (opts.direction ?? 'forward') === 'forward'
-        ? ['from_pk', 'to_pk', link.to, link.from]
-        : ['to_pk', 'from_pk', link.from, link.to]
-    // A hidden origin leaks nothing: traversal from an object the actor
-    // cannot see behaves exactly like traversal from a missing one.
-    if (!this.#read(originType, pk, opts.actor)) return []
+    const forward = source.type === link.from
+    const reverse = source.type === link.to
+    if (!forward && !reverse) throw new Error(`link "${linkName}" does not connect "${source.type}"`)
+    if (forward && reverse && opts.direction === undefined) {
+      throw new Error(`link "${linkName}" requires a direction from "${source.type}"`)
+    }
+    const direction = opts.direction === undefined ? (forward ? 'forward' : 'reverse') : opts.direction
+    if (!((direction === 'forward' && forward) || (direction === 'reverse' && reverse))) {
+      throw new Error(`invalid direction "${direction}" for link "${linkName}" from "${source.type}"`)
+    }
+    const [where, select, targetType] = direction === 'forward'
+      ? ['from_pk', 'to_pk', link.to]
+      : ['to_pk', 'from_pk', link.from]
+    // The input is a snapshot, not authority. Re-read the origin under this actor.
+    if (!this.#read(source.type, source.pk, opts.actor)) return []
     const rows = this.#db
       .prepare(`SELECT ${select} AS pk FROM links WHERE name = ? AND ${where} = ? ORDER BY pk`)
-      .all(linkName, pk) as { pk: string }[]
+      .all(linkName, source.pk) as { pk: string }[]
     return rows
-      .map((r) => this.#read<Target>(targetType, r.pk, opts.actor))
-      .filter((o): o is Target => o !== undefined)
+      .map((r) => this.#read<ObjectOf<T, LinkTarget<T, S, L>>>(targetType, r.pk, opts.actor))
+      .filter((o) => o !== undefined)
   }
 
   /** Query-time aggregation over the indexed objects. Nothing is precomputed. */
@@ -348,7 +361,7 @@ export class Runtime<T extends OntologyDef = OntologyDef> {
       return { ok: false, error }
     }
 
-    const action: ActionDef | undefined = Object.hasOwn(this.ontology.actions, actionName)
+    const action: ActionDef<any, any> | undefined = Object.hasOwn(this.ontology.actions, actionName)
       ? this.ontology.actions[actionName]
       : undefined
     if (!action) {
@@ -395,12 +408,10 @@ export class Runtime<T extends OntologyDef = OntologyDef> {
       throw e
     }
 
-    let object: Record<string, unknown> | undefined
+    let object: ObjectInstance | undefined
     try {
-      object = this.#fetch(action.object, pk)
-      // Visibility gates action targets too: an object the actor cannot see
-      // is TARGET_NOT_FOUND — same as a missing one, so existence never leaks.
-      if (object !== undefined && !this.#visible(action.object, object, opts.actor)) object = undefined
+      // Hidden targets are indistinguishable from missing ones.
+      object = this.#read(action.object, pk, opts.actor)
     } catch (e) {
       crashed(e)
     }
@@ -484,7 +495,7 @@ export class Runtime<T extends OntologyDef = OntologyDef> {
         this.#writeback.apply(structuredClone(edits), {
           action: actionName,
           actor: opts.actor,
-          target: { type: action.object, pk, object: structuredClone(object) },
+          target: structuredClone(object),
         })
       } catch (e) {
         // The adapter may have partially applied the plan before throwing —
@@ -632,36 +643,36 @@ export class Runtime<T extends OntologyDef = OntologyDef> {
     return JSON.stringify(value)
   }
 
-  /** One object, as the actor sees it: a hidden object is indistinguishable from a nonexistent one. */
-  #read<O = Record<string, unknown>>(type: string, pk: string, actor: string): O | undefined {
-    const object = this.#fetch<O>(type, pk)
-    if (object === undefined) return undefined
-    return this.#visible(type, object as Record<string, unknown>, actor) ? object : undefined
+  /** A read snapshot, scoped to the actor. Hidden and missing objects are alike. */
+  #read<O extends ObjectInstance = ObjectInstance>(type: string, pk: string, actor: string): O | undefined {
+    const properties = this.#fetch(type, pk)
+    if (properties === undefined) return undefined
+    const object = { type, pk, properties } as O
+    return this.#visible(object, actor) ? object : undefined
   }
 
-  /** Every object of a type the actor can see, in pk order, optionally filtered. */
-  #scan<O = Record<string, unknown>>(type: string, actor: string, filter?: Partial<O> | ((o: O) => boolean)): O[] {
+  #scan<O extends ObjectInstance = ObjectInstance>(type: string, actor: string, filter?: ObjectFilter<O>): O[] {
     this.#objectDef(type)
-    const rows = this.#db.prepare('SELECT data FROM objects WHERE type = ? ORDER BY pk').all(type) as {
-      data: string
+    const rows = this.#db.prepare('SELECT pk, data FROM objects WHERE type = ? ORDER BY pk').all(type) as {
+      pk: string; data: string
     }[]
     return rows
-      .map((r) => JSON.parse(r.data) as O)
-      .filter((o) => this.#visible(type, o as Record<string, unknown>, actor))
+      .map((r) => ({ type, pk: r.pk, properties: JSON.parse(r.data) }) as O)
+      .filter((o) => this.#visible(o, actor))
       .filter(matcher(filter))
   }
 
-  /** Raw fetch without visibility — for internal integrity checks only. */
-  #fetch<O = Record<string, unknown>>(type: string, pk: string): O | undefined {
+  /** Raw properties without visibility — for internal integrity checks only. */
+  #fetch(type: string, pk: string): Record<string, unknown> | undefined {
     this.#objectDef(type)
     const row = this.#db
       .prepare('SELECT data FROM objects WHERE type = ? AND pk = ?')
       .get(type, pk) as { data: string } | undefined
-    return row ? (JSON.parse(row.data) as O) : undefined
+    return row ? JSON.parse(row.data) : undefined
   }
 
-  #visible(type: string, object: Record<string, unknown>, actor: string): boolean {
-    const visibility = this.ontology.objects[type]?.visibility
+  #visible(object: ObjectInstance, actor: string): boolean {
+    const visibility = this.ontology.objects[object.type]?.visibility
     return visibility ? visibility({ object, actor }) : true
   }
 
@@ -837,9 +848,9 @@ export function createRuntime<T extends OntologyDef>(
   return new Runtime(ontology, db, opts)
 }
 
-function matcher<O>(filter?: Partial<O> | ((o: O) => boolean)): (o: O) => boolean {
+function matcher<O extends ObjectInstance>(filter?: ObjectFilter<O>): (o: O) => boolean {
   if (!filter) return () => true
-  if (typeof filter === 'function') return filter as (o: O) => boolean
+  if (typeof filter === 'function') return filter
   const entries = Object.entries(filter)
-  return (o: O) => entries.every(([k, v]) => (o as Record<string, unknown>)[k] === v)
+  return (o: O) => entries.every(([k, v]) => o.properties[k] === v)
 }

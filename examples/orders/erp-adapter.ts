@@ -27,7 +27,7 @@ export function createErpAdapter(dbs: LegacyDbs): WritebackAdapter {
           throw new Error('legacy-erp can only write back Order.status changes')
         }
 
-        const order = meta.target.object as { sourceSystem: string; sourceId: string }
+        const order = meta.target.properties as { sourceSystem: string; sourceId: string }
 
         // The system of record re-verifies its own invariant on cancellation:
         // a guarded UPDATE lets the ERP refuse a stale cancel even when the

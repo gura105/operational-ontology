@@ -8,7 +8,7 @@ import Database from 'better-sqlite3'
 import { z } from 'zod'
 import { Client } from '@modelcontextprotocol/sdk/client/index.js'
 import { InMemoryTransport } from '@modelcontextprotocol/sdk/inMemory.js'
-import { createRuntime, defineAction, defineObject, defineOntology } from '../src/core.js'
+import { createRuntime, defineAction, defineLink, defineObject, defineOntology } from '../src/core.js'
 import { buildMcpServer } from '../src/mcp.js'
 import { createFixtures } from './helpers/tmp-fixtures.js'
 import { integrate } from '../examples/orders/integrate.js'
@@ -67,14 +67,56 @@ test('an agent can read the model through search and traversal', async () => {
   const { client } = await connectedClient()
   const search = await client.callTool({ name: 'search_order', arguments: { status: 'shipped' } })
   const shipped = JSON.parse((search.content as any)[0].text)
-  assert.deepEqual(shipped.map((o: any) => o.id).sort(), ['N-A-1001', 'S-SO-78'])
+  assert.deepEqual(shipped.map((o: any) => o.pk).sort(), ['N-A-1001', 'S-SO-78'])
+  assert.equal(shipped[0].type, 'Order')
+  assert.equal(shipped[0].properties.status, 'shipped')
+
+  const get = await client.callTool({ name: 'get_customer', arguments: { id: 'N-C01' } })
+  const customer = JSON.parse((get.content as any)[0].text)
+  assert.equal(customer.type, 'Customer')
 
   const traverse = await client.callTool({
     name: 'traverse_customer_orders',
-    arguments: { pk: 'N-C01', direction: 'forward' },
+    arguments: { source: customer },
   })
   const ordersOfYamada = JSON.parse((traverse.content as any)[0].text)
-  assert.deepEqual(ordersOfYamada.map((o: any) => o.id).sort(), ['N-A-1001', 'N-A-1002'])
+  assert.deepEqual(ordersOfYamada.map((o: any) => o.pk).sort(), ['N-A-1001', 'N-A-1002'])
+  const reverse = await client.callTool({
+    name: 'traverse_customer_orders', arguments: { source: ordersOfYamada[0] },
+  })
+  assert.deepEqual(JSON.parse((reverse.content as any)[0].text), [customer])
+  for (const args of [
+    { source: customer, direction: 'reverse' },
+    { source: { type: 'Customer', pk: customer.pk } },
+    { pk: customer.pk, direction: 'forward' },
+  ]) {
+    const invalid = await client.callTool({ name: 'traverse_customer_orders', arguments: args })
+    assert.equal(invalid.isError, true)
+  }
+})
+
+test('MCP same-type links expose a required direction and validate it', async () => {
+  const model = defineOntology({
+    name: 'employees',
+    objects: { Employee: defineObject({ primaryKey: 'id', properties: { id: z.string() } }) },
+    links: { manages: defineLink({ from: 'Employee', to: 'Employee', kind: 'one-to-many' }) },
+    actions: {},
+  })
+  const rt = createRuntime(model, new Database(':memory:'))
+  rt.load({ objects: { Employee: [{ id: 'E1' }, { id: 'E2' }] }, links: { manages: [['E1', 'E2']] } })
+  const server = buildMcpServer(rt)
+  const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair()
+  const client = new Client({ name: 'employee-client', version: '0.0.0' })
+  await Promise.all([server.connect(serverTransport), client.connect(clientTransport)])
+  const tool = (await client.listTools()).tools.find((t) => t.name === 'traverse_manages')!
+  assert.ok(tool.inputSchema.required?.includes('direction'))
+  const source = rt.get('Employee', 'E1', { actor: 'agent:test' })!
+  const missing = await client.callTool({ name: tool.name, arguments: { source } })
+  assert.equal(missing.isError, true)
+  const forward = await client.callTool({ name: tool.name, arguments: { source, direction: 'forward' } })
+  assert.deepEqual(JSON.parse((forward.content as any)[0].text).map((o: any) => o.pk), ['E2'])
+  const reverse = await client.callTool({ name: tool.name, arguments: { source, direction: 'reverse' } })
+  assert.deepEqual(JSON.parse((reverse.content as any)[0].text), [])
 })
 
 test('an agent can aggregate through the model', async () => {
@@ -98,7 +140,7 @@ test('the same business rule that gates humans gates the agent', async () => {
   assert.equal(result.isError, true)
   const payload = JSON.parse((result.content as any)[0].text)
   assert.equal(payload.error.code, 'SHIPPED_ORDER_CANNOT_BE_CANCELLED')
-  assert.equal(rt.get('Order', 'N-A-1001', { actor: 'user:hq' })!.status, 'shipped')
+  assert.equal(rt.get('Order', 'N-A-1001', { actor: 'user:hq' })!.properties.status, 'shipped')
 })
 
 test('the system of record refuses a stale cancellation (guarded write-back)', async () => {
@@ -112,7 +154,7 @@ test('the system of record refuses a stale cancellation (guarded write-back)', a
   assert.equal(result.isError, true)
   const payload = JSON.parse((result.content as any)[0].text)
   assert.equal(payload.error.code, 'WRITEBACK_FAILED')
-  assert.equal(rt.get('Order', 'S-SO-77', { actor: 'user:hq' })!.status, 'pending')
+  assert.equal(rt.get('Order', 'S-SO-77', { actor: 'user:hq' })!.properties.status, 'pending')
 })
 
 test('aggregate rejects property names the model does not define', async () => {
@@ -172,21 +214,23 @@ test('an agent write creates ontology-owned state that survives re-indexing', as
   rt.load(integrate(legacy))
   const traverse = await client.callTool({
     name: 'traverse_order_notes',
-    arguments: { pk: 'N-A-1002', direction: 'forward' },
+    arguments: { source: rt.get('Order', 'N-A-1002', { actor: 'agent:test' }) },
   })
   const notes = JSON.parse((traverse.content as any)[0].text)
-  assert.deepEqual(notes.map((n: any) => n.id), ['NOTE-1'])
+  assert.deepEqual(notes.map((n: any) => n.pk), ['NOTE-1'])
 })
 
 test('derived tool names that collide fail at build time, both origins named', () => {
+  const clashObjects = {
+    Order: defineObject({ primaryKey: 'id', properties: { id: z.string() } }),
+  }
+
   const clash = defineOntology({
     name: 'clash',
-    objects: {
-      Order: defineObject({ primaryKey: 'id', properties: { id: z.string() } }),
-    },
+    objects: clashObjects,
     links: {},
     actions: {
-      searchOrder: defineAction({
+      searchOrder: defineAction(clashObjects, {
         object: 'Order',
         targetParam: 'id',
         params: { id: z.string() },
@@ -207,7 +251,7 @@ test('an allowed agent write lands, is audited, and reaches the system of record
     arguments: { orderId: 'S-SO-77', reason: 'duplicate' },
   })
   assert.notEqual(result.isError, true)
-  assert.equal(rt.get('Order', 'S-SO-77', { actor: 'user:hq' })!.status, 'cancelled')
+  assert.equal(rt.get('Order', 'S-SO-77', { actor: 'user:hq' })!.properties.status, 'cancelled')
 
   const row = legacy.south
     .prepare("SELECT ORDER_STATUS FROM SALES_ORDER WHERE ORDER_ID = 'SO-77'")

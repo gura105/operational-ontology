@@ -1,12 +1,19 @@
-/** The model as data and the types derived from it. */
+/** The model as data, its instance values, and the types derived from it. */
 import { isDeepStrictEqual } from 'node:util'
 import { z } from 'zod'
+
+/** A read snapshot. Identity is (type, pk); properties are business data. */
+export interface ObjectInstance<N extends string = string, P = Record<string, unknown>> {
+  readonly type: N
+  readonly pk: string
+  properties: P
+}
 
 export type Properties = z.ZodRawShape
 
 export interface ObjectTypeDef<S extends Properties = Properties> {
   /** Property that uniquely identifies an object of this type. Must be a string property. */
-  primaryKey: string
+  primaryKey: keyof S & string
   /**
    * Property schema. Validates rows at indexing time and edits at write time,
    * and is reused verbatim to generate MCP tool schemas. Schemas must
@@ -29,7 +36,7 @@ export interface ObjectTypeDef<S extends Properties = Properties> {
    *   source has no authority over them); they start at the declared default,
    *   change only through actions, and survive re-indexing via the overlay.
    */
-  owned?: true | Record<string, unknown>
+  owned?: true | Partial<z.input<z.ZodObject<S>>>
   /**
    * Row-level visibility, attached to the model (an optional slot). Absent
    * means visible to everyone: this reference implementation is fail-open by
@@ -38,7 +45,7 @@ export interface ObjectTypeDef<S extends Properties = Properties> {
    * deployment makes this slot required rather than optional, on top of an
    * authenticated identity layer. See "permissions and security" in the README.
    */
-  visibility?: (ctx: { object: Record<string, unknown>; actor: string }) => boolean
+  visibility?: (ctx: { object: ObjectInstance<string, z.output<z.ZodObject<S>>>; actor: string }) => boolean
   /**
    * Where the rows physically come from (documentation only — the integration
    * itself belongs to the data layer, outside the ontology).
@@ -138,10 +145,11 @@ export type Edit =
   | { op: 'link'; link: string; from: string; to: string }
   | { op: 'unlink'; link: string; from: string; to: string }
 
-export const modify = (object: string, pk: string, changes: Record<string, unknown>): Edit => ({
+/** Describe a change to an instance; only execute() applies it. */
+export const modify = <O extends ObjectInstance>(object: O, changes: NoInfer<Partial<O['properties']>>): Edit => ({
   op: 'modify',
-  object,
-  pk,
+  object: object.type,
+  pk: object.pk,
   changes,
 })
 export const create = (object: string, pk: string, data: Record<string, unknown>): Edit => ({
@@ -153,7 +161,7 @@ export const create = (object: string, pk: string, data: Record<string, unknown>
 export const link = (linkName: string, from: string, to: string): Edit => ({ op: 'link', link: linkName, from, to })
 export const unlink = (linkName: string, from: string, to: string): Edit => ({ op: 'unlink', link: linkName, from, to })
 
-export interface ActionCtx<O = Record<string, unknown>, P = Record<string, unknown>> {
+export interface ActionCtx<O = ObjectInstance, P = Record<string, unknown>> {
   /** The object the action targets, loaded from the ontology store. */
   object: O
   params: P
@@ -164,11 +172,11 @@ export interface ActionCtx<O = Record<string, unknown>, P = Record<string, unkno
  * The schema side of an action — its type. Each `execute()` call is one
  * instance of it, applied or refused, recorded as an audit entry.
  */
-export interface ActionDef<S extends Properties = Properties> {
+export interface ActionDef<S extends Properties = Properties, O extends ObjectInstance = ObjectInstance> {
   /** Object type this action operates on. */
-  object: string
+  object: O['type']
   /** Name of the param that carries the target's primary key. */
-  targetParam: string
+  targetParam: keyof S & string
   /** Parameter schema. Reused verbatim as the MCP tool input schema. */
   params: S
   description?: string
@@ -178,14 +186,14 @@ export interface ActionDef<S extends Properties = Properties> {
    * cancelled"), not access control — a permission system decides *who* may
    * act; preconditions decide *whether the operation is valid at all*.
    */
-  preconditions: Array<(ctx: ActionCtx<any, any>) => Violation | void>
+  preconditions: Array<(ctx: ActionCtx<O, z.output<z.ZodObject<S>>>) => Violation | void>
   /**
    * The changes this action makes, described as data. Effects must be pure:
    * they describe edits, they do not perform them. Reaching into external
    * systems from here bypasses write-back ordering and the audit log — side
    * effects belong to the WritebackAdapter.
    */
-  effects: (ctx: ActionCtx<any, any>) => Edit[]
+  effects: (ctx: ActionCtx<O, z.output<z.ZodObject<S>>>) => Edit[]
   /**
    * Authority declaration for this action's changes. `writeback: true`
    * declares them source-backed: the edit plan is routed through the
@@ -197,7 +205,12 @@ export interface ActionDef<S extends Properties = Properties> {
   writeback?: boolean
 }
 
-export function defineAction<S extends Properties>(def: ActionDef<S>): ActionDef<S> {
+/** Give rules the object schema before their callbacks are inferred. */
+export function defineAction<Objects extends ObjectDefinitions, K extends keyof Objects & string, S extends Properties>(
+  objects: Objects,
+  def: ActionDef<S, ObjectInstance<K, PropertiesOf<Objects[K]>>>,
+): ActionDef<S, ObjectInstance<K, PropertiesOf<Objects[K]>>> {
+  if (!Object.hasOwn(objects, def.object)) throw new Error(`unknown object type "${def.object}"`)
   if (!Object.hasOwn(def.params, def.targetParam)) {
     throw new Error(`targetParam "${def.targetParam}" is not one of the action's params`)
   }
@@ -206,12 +219,12 @@ export function defineAction<S extends Properties>(def: ActionDef<S>): ActionDef
 
 export interface OntologyDef {
   name: string
-  objects: Record<string, ObjectTypeDef<any>>
+  objects: ObjectDefinitions
   // `any` ends, not `string`: as the contextual type of a definition literal,
   // `LinkTypeDef<string, string>` would widen the literal names a nested
   // defineLink() call inferred — and the model-derived types below need them.
   links: Record<string, LinkTypeDef<any, any>>
-  actions: Record<string, ActionDef<any>>
+  actions: Record<string, ActionDef<any, any>>
 }
 
 export function defineOntology<T extends OntologyDef>(def: T): T {
@@ -230,64 +243,39 @@ export function defineOntology<T extends OntologyDef>(def: T): T {
   return def
 }
 
-// ───────────────────────────── Model-derived types ─────────────────────────────
-//
-// The runtime's call sites are typed by the definition they were built from:
-// object, link, and action names are the keys of the model, an object's
-// instance shape is what its property schema produces, and an action's
-// params are its parameter schema. A runtime built from a definition typed
-// only as `OntologyDef` falls back to strings and open records — the same
-// contract as before, just untyped.
+// ── Model-derived types: names, schemas, and the ends of a link ──
 
+type ObjectDefinitions = Record<string, ObjectTypeDef<any>>
+type PropertiesOf<D extends ObjectTypeDef<any>> = z.output<z.ZodObject<D['properties']>>
 export type ObjectName<T extends OntologyDef> = keyof T['objects'] & string
 export type LinkName<T extends OntologyDef> = keyof T['links'] & string
 export type ActionName<T extends OntologyDef> = keyof T['actions'] & string
 export type Direction = 'forward' | 'reverse'
 
-/** `any` is the untyped fallback's marker: whatever it names, we know nothing about. */
-type IsAny<X> = 0 extends 1 & X ? true : false
+/** Mapping before indexing preserves the tag/properties relationship for unions. */
+export type ObjectOf<T extends OntologyDef, K extends ObjectName<T>> = {
+  [N in K]: ObjectInstance<N, PropertiesOf<T['objects'][N]>>
+}[K]
+export type ParamsOf<T extends OntologyDef, A extends ActionName<T>> =
+  z.input<z.ZodObject<T['actions'][A]['params']>>
 
-/** The instance shape of object type `K`, as its property schema produces it. */
-export type ObjectOf<T extends OntologyDef, K> =
-  IsAny<K> extends true
-    ? Record<string, unknown>
-    : K extends ObjectName<T>
-      ? T['objects'][K] extends ObjectTypeDef<infer S>
-        ? IsAny<S> extends true
-          ? Record<string, unknown>
-          : z.infer<z.ZodObject<S>>
-        : Record<string, unknown>
-      : Record<string, unknown>
+export type LinksFrom<T extends OntologyDef, S extends ObjectName<T>> = {
+  [L in LinkName<T>]: S extends T['links'][L]['from'] | T['links'][L]['to'] ? L : never
+}[LinkName<T>]
+export type LinkDirections<T extends OntologyDef, S extends ObjectName<T>, L extends LinkName<T>> =
+  | (S extends T['links'][L]['from'] ? 'forward' : never)
+  | (S extends T['links'][L]['to'] ? 'reverse' : never)
 
-/**
- * The object type a traversal of link `L` arrives at, decided by the shape
- * of the options it was called with — not by an inferred direction, which
- * would read `direction?: 'reverse'` as reverse even when the value is
- * absent and the traversal runs forward. Absent: the to side (forward).
- * A required `'reverse'`: the from side. `'forward'`, required or
- * optional: the to side. Anything else — an optional `'reverse'`, a union —
- * could go either way, and the type says so. Two mechanics: `O` is
- * distributed first, so a union of option shapes is decided member by
- * member (`keyof` of a union keeps only the common keys, which would hide
- * `direction`); and presence is tested with `keyof`, because
- * `{ direction?: undefined }` alone is a weak type, which an options object
- * without `direction` would fail to match.
- */
-export type LinkEnd<T extends OntologyDef, L extends LinkName<T>, O extends { direction?: Direction }> =
-  O extends unknown
-    ? 'direction' extends keyof O
-      ? O extends { direction: 'reverse' }
-        ? T['links'][L]['from']
-        : Exclude<O['direction'], undefined> extends 'forward'
-          ? T['links'][L]['to']
-          : T['links'][L]['from'] | T['links'][L]['to']
-      : T['links'][L]['to']
+/** The other end. A self-type link returns the same type in either direction. */
+export type LinkTarget<T extends OntologyDef, S extends ObjectName<T>, L extends LinkName<T>> =
+  L extends LinkName<T>
+    ? (S extends T['links'][L]['from'] ? T['links'][L]['to'] : never)
+      | (S extends T['links'][L]['to'] ? T['links'][L]['from'] : never)
     : never
 
-/** What a caller passes to action `A` — its parameter schema's input side. */
-export type ParamsOf<T extends OntologyDef, A extends ActionName<T>> =
-  T['actions'][A] extends ActionDef<infer S>
-    ? IsAny<S> extends true
-      ? Record<string, unknown>
-      : z.input<z.ZodObject<S>>
-    : Record<string, unknown>
+export type TraverseOptions<T extends OntologyDef, S extends ObjectName<T>, L extends LinkName<T>> =
+  { actor: string } & (Direction extends LinkDirections<T, S, L>
+    ? { direction: LinkDirections<T, S, L> }
+    : { direction?: LinkDirections<T, S, L> })
+
+export type ObjectFilter<O extends ObjectInstance> = Partial<O['properties']> | ((object: O) => boolean)
