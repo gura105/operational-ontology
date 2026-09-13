@@ -10,6 +10,7 @@ This is a small, readable reference implementation of Operational Ontology. Keep
 - Run `pnpm typecheck`, `pnpm test`, and `pnpm demo` before merging changes. CI must pass.
 - Merging an ordinary PR does not request a release. Do not bump the version, create a version tag, or publish a Release for each PR.
 - Do not push directly to, delete, or force-push `main` or `next`. Do not bypass or weaken repository rules to complete a task.
+- `traffic` holds repository traffic snapshots written weekly by the `Traffic` workflow, which needs the `TRAFFIC_TOKEN` secret (a fine-grained personal access token limited to this repository with `Administration: Read-only`). Do not rebase, rewrite, or delete `traffic`.
 
 ## Release
 
