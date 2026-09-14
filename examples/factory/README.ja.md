@@ -6,15 +6,15 @@
 
 9月8日の設備点検で PRESS-1 の異常が確認されました。出荷時の検査は合格しており、9月7日に出荷済みです。今回の調査には、9月6日を製造日の対象範囲として与えます。製品への影響は疑いの段階で、既知の不良品を出荷した理由や、故障開始時刻を推定する例ではありません。
 
+<img src="./assets/ontology-overview.ja.png" alt="工場のオントロジー全体図。Equipment・Lot・ShipmentLine・Shipment・Customer と、ontology-owned な ContactTask のリンク構造。customerImpact が出荷明細の根拠を集計し、createContactTask が選択内容を検査してタスクと根拠リンクを記録する。">
+
+グレーはソース由来、オレンジはオントロジーが所有する状態です。全オブジェクト型・リンク型を示し、属性は抜粋しています。[編集用 SVG](./assets/ontology-overview.ja.svg)。
+
 **[▶ オントロジーの捜査型分析解説｜工場編（日本語音声・6:16）](https://www.youtube.com/watch?v=p6pljWy4xzg)**
 
 <a href="https://www.youtube.com/watch?v=p6pljWy4xzg">
   <img src="https://i.ytimg.com/vi/p6pljWy4xzg/maxresdefault.jpg" alt="オントロジーの捜査型分析解説｜工場編" width="640">
 </a>
-
-<img src="./assets/ontology-overview.ja.png" alt="工場のオントロジー全体図。Equipment・Lot・ShipmentLine・Shipment・Customer と、ontology-owned な ContactTask のリンク構造。customerImpact が出荷明細の根拠を集計し、createContactTask が選択内容を検査してタスクと根拠リンクを記録する。">
-
-グレーはソース由来、オレンジはオントロジーが所有する状態です。全オブジェクト型・リンク型を示し、属性は抜粋しています。[編集用 SVG](./assets/ontology-overview.ja.svg)。
 
 `demo.ts` は Runtime の filter と pivot を直接組み合わせます。
 

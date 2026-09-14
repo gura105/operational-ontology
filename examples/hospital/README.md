@@ -6,17 +6,17 @@ Run `pnpm demo:hospital`. The source records are synthetic and all state resets 
 
 The admission planner follows Hospital H to waiting patients, then their admission confirmations. Filtering approved confirmations and pivoting back yields P1 and P4, not every patient. P2 is still awaiting confirmation; P3 is already admitted. Every waiting patient has complete input requirements. P4 is an additional confirmed patient so resource consumption can be observed separately from P1's own allocation status.
 
-**[▶ Ontology: Investigative Analysis Explained | Hospital (English narration, 5:48)](https://www.youtube.com/watch?v=cXEIbE-2abs)**
-
-<a href="https://www.youtube.com/watch?v=cXEIbE-2abs">
-  <img src="https://i.ytimg.com/vi/cXEIbE-2abs/maxresdefault.jpg" alt="Ontology: Investigative Analysis Explained | Hospital" width="640">
-</a>
-
 <img src="./assets/ontology-overview.png" alt="Hospital ontology: Hospital links to Patient, Bed and Nurse; Patient links to Admission. bedSearch and nurseSearch evaluate candidates. allocate rechecks the selection and creates an ontology-owned Allocation with patient, bed and nurse links.">
 
 Gray: source-backed state. Orange: ontology-owned state. The diagram shows all object and link types, with selected properties. [Editable SVG](./assets/ontology-overview.svg).
 
 The orange allocation links are absent initially. They are created by the allocation Action, not by candidate search.
+
+**[▶ Ontology: Investigative Analysis Explained | Hospital (English narration, 5:48)](https://www.youtube.com/watch?v=cXEIbE-2abs)**
+
+<a href="https://www.youtube.com/watch?v=cXEIbE-2abs">
+  <img src="https://i.ytimg.com/vi/cXEIbE-2abs/maxresdefault.jpg" alt="Ontology: Investigative Analysis Explained | Hospital" width="640">
+</a>
 
 For P1, `bedSearch` returns a Bed ObjectSet plus assessments of all beds in the same hospital:
 

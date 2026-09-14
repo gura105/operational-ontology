@@ -6,17 +6,17 @@
 
 入院調整の担当者は、病院 H から入院待ち患者、その受入確認へ進みます。確認済みの記録を filter して患者へ戻ると、全患者ではなく P1・P4 が得られます。P2 は確認待ち、P3 は入院中です。入院待ち患者の入力要件は全員分を用意しています。P4 は、P1 自身の仮割当状態と資源の消費を分けて確かめるために追加した確認済み患者です。
 
-**[▶ オントロジーの捜査型分析解説｜病院編（日本語音声・5:48）](https://www.youtube.com/watch?v=rDBCEIlDfhE)**
-
-<a href="https://www.youtube.com/watch?v=rDBCEIlDfhE">
-  <img src="https://i.ytimg.com/vi/rDBCEIlDfhE/maxresdefault.jpg" alt="オントロジーの捜査型分析解説｜病院編" width="640">
-</a>
-
 <img src="./assets/ontology-overview.ja.png" alt="病院のオントロジー全体図。Hospital から Patient・Bed・Nurse、Patient から Admission へリンクする。bedSearch・nurseSearch が候補を評価し、allocate が選択内容を再検査して ontology-owned な Allocation と患者・病床・看護師へのリンクを作る。">
 
 グレーはソース由来、オレンジはオントロジーが所有する状態です。全オブジェクト型・リンク型を示し、属性は抜粋しています。[編集用 SVG](./assets/ontology-overview.ja.svg)。
 
 オレンジの仮割当リンクは最初は存在せず、候補検索ではなく割当の Action が作ります。
+
+**[▶ オントロジーの捜査型分析解説｜病院編（日本語音声・5:48）](https://www.youtube.com/watch?v=rDBCEIlDfhE)**
+
+<a href="https://www.youtube.com/watch?v=rDBCEIlDfhE">
+  <img src="https://i.ytimg.com/vi/rDBCEIlDfhE/maxresdefault.jpg" alt="オントロジーの捜査型分析解説｜病院編" width="640">
+</a>
 
 P1 に対する `bedSearch` は、病床の ObjectSet と、同じ病院の全病床の評価を返します。
 

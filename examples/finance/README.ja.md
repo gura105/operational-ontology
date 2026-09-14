@@ -8,17 +8,17 @@
 
 まず送金先を照合し、確認すべき受取口座と取引を絞ります。その結果を使って、請求書と送金目的の確認につなげる調査ケースを作るところまでが、このデモの流れです。午前中の入金に関する連絡はシナリオの前提で、入金データや異常を検知する処理は実装に含みません。
 
-**[▶ オントロジーの捜査型分析解説｜金融編（日本語音声・6:40）](https://www.youtube.com/watch?v=8JwF0oU-idc)**
-
-<a href="https://www.youtube.com/watch?v=8JwF0oU-idc">
-  <img src="https://i.ytimg.com/vi/8JwF0oU-idc/maxresdefault.jpg" alt="オントロジーの捜査型分析解説｜金融編" width="640">
-</a>
-
 <img src="./assets/ontology-overview.ja.png" alt="金融のオントロジー全体図。Account と Transfer の間に outgoing・incoming のリンクを持つ。recipientSummary が調査範囲内の受取口座の指標と根拠を求め、openInvestigation が対象口座・起点口座・根拠取引と結びつく ontology-owned な Investigation を記録する。">
 
 グレーはソース由来、オレンジはオントロジーが所有する状態です。全オブジェクト型・リンク型を示し、属性は抜粋しています。[編集用 SVG](./assets/ontology-overview.ja.svg)。
 
 `outgoing` と `incoming` は別々の Account → Transfer リンクです。Transfer は ID・日時・整数の円金額を持つオブジェクトなので、口座へ pivot する段階までは複数回の送金と時刻を保持できます。
+
+**[▶ オントロジーの捜査型分析解説｜金融編（日本語音声・6:40）](https://www.youtube.com/watch?v=8JwF0oU-idc)**
+
+<a href="https://www.youtube.com/watch?v=8JwF0oU-idc">
+  <img src="https://i.ytimg.com/vi/8JwF0oU-idc/maxresdefault.jpg" alt="オントロジーの捜査型分析解説｜金融編" width="640">
+</a>
 
 各起点の出金取引へ進み、9月8日の午後で filter し、受取口座へ pivot します。
 
