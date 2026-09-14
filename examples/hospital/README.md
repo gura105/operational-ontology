@@ -8,7 +8,9 @@ The admission planner follows Hospital H to waiting patients, then their admissi
 
 **[▶ Ontology: Investigative Analysis Explained | Hospital (English narration, 5:48)](https://www.youtube.com/watch?v=cXEIbE-2abs)**
 
-[![Ontology: Investigative Analysis Explained | Hospital](https://i.ytimg.com/vi/cXEIbE-2abs/mqdefault.jpg)](https://www.youtube.com/watch?v=cXEIbE-2abs)
+<a href="https://www.youtube.com/watch?v=cXEIbE-2abs">
+  <img src="https://i.ytimg.com/vi/cXEIbE-2abs/maxresdefault.jpg" alt="Ontology: Investigative Analysis Explained | Hospital" width="640">
+</a>
 
 <img src="./assets/ontology-overview.png" alt="Hospital ontology: Hospital links to Patient, Bed and Nurse; Patient links to Admission. bedSearch and nurseSearch evaluate candidates. allocate rechecks the selection and creates an ontology-owned Allocation with patient, bed and nurse links.">
 

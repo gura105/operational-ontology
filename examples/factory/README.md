@@ -8,7 +8,9 @@ On September 8, an equipment inspection identifies an anomaly on PRESS-1. Releas
 
 **[▶ Ontology: Investigative Analysis Explained | Factory (English narration, 6:02)](https://www.youtube.com/watch?v=kQFvOResIvI)**
 
-[![Ontology: Investigative Analysis Explained | Factory](https://i.ytimg.com/vi/kQFvOResIvI/mqdefault.jpg)](https://www.youtube.com/watch?v=kQFvOResIvI)
+<a href="https://www.youtube.com/watch?v=kQFvOResIvI">
+  <img src="https://i.ytimg.com/vi/kQFvOResIvI/maxresdefault.jpg" alt="Ontology: Investigative Analysis Explained | Factory" width="640">
+</a>
 
 <img src="./assets/ontology-overview.png" alt="Factory ontology with Equipment, Lot, ShipmentLine, Shipment, Customer and ontology-owned ContactTask. customerImpact summarizes shipped-line evidence; createContactTask validates the selection and records the task and evidence links.">
 

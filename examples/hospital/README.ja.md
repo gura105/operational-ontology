@@ -8,7 +8,9 @@
 
 **[▶ オントロジーの捜査型分析解説｜病院編（日本語音声・5:48）](https://www.youtube.com/watch?v=rDBCEIlDfhE)**
 
-[![オントロジーの捜査型分析解説｜病院編](https://i.ytimg.com/vi/rDBCEIlDfhE/mqdefault.jpg)](https://www.youtube.com/watch?v=rDBCEIlDfhE)
+<a href="https://www.youtube.com/watch?v=rDBCEIlDfhE">
+  <img src="https://i.ytimg.com/vi/rDBCEIlDfhE/maxresdefault.jpg" alt="オントロジーの捜査型分析解説｜病院編" width="640">
+</a>
 
 <img src="./assets/ontology-overview.ja.png" alt="病院のオントロジー全体図。Hospital から Patient・Bed・Nurse、Patient から Admission へリンクする。bedSearch・nurseSearch が候補を評価し、allocate が選択内容を再検査して ontology-owned な Allocation と患者・病床・看護師へのリンクを作る。">
 

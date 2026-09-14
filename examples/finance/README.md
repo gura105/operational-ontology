@@ -10,7 +10,9 @@ The demo compares recipients, narrows down the accounts and transfers to examine
 
 **[▶ Ontology: Investigative Analysis Explained | Finance (English narration, 6:36)](https://www.youtube.com/watch?v=4urBRngmnuA)**
 
-[![Ontology: Investigative Analysis Explained | Finance](https://i.ytimg.com/vi/4urBRngmnuA/mqdefault.jpg)](https://www.youtube.com/watch?v=4urBRngmnuA)
+<a href="https://www.youtube.com/watch?v=4urBRngmnuA">
+  <img src="https://i.ytimg.com/vi/4urBRngmnuA/maxresdefault.jpg" alt="Ontology: Investigative Analysis Explained | Finance" width="640">
+</a>
 
 <img src="./assets/ontology-overview.png" alt="Finance ontology: Account has separate outgoing and incoming links to Transfer. recipientSummary computes scoped recipient metrics and evidence. openInvestigation records an ontology-owned Investigation linked to the target account, origin accounts and evidence transfers.">
 

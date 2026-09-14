@@ -8,7 +8,9 @@
 
 **[▶ オントロジーの捜査型分析解説｜工場編（日本語音声・6:16）](https://www.youtube.com/watch?v=p6pljWy4xzg)**
 
-[![オントロジーの捜査型分析解説｜工場編](https://i.ytimg.com/vi/p6pljWy4xzg/mqdefault.jpg)](https://www.youtube.com/watch?v=p6pljWy4xzg)
+<a href="https://www.youtube.com/watch?v=p6pljWy4xzg">
+  <img src="https://i.ytimg.com/vi/p6pljWy4xzg/maxresdefault.jpg" alt="オントロジーの捜査型分析解説｜工場編" width="640">
+</a>
 
 <img src="./assets/ontology-overview.ja.png" alt="工場のオントロジー全体図。Equipment・Lot・ShipmentLine・Shipment・Customer と、ontology-owned な ContactTask のリンク構造。customerImpact が出荷明細の根拠を集計し、createContactTask が選択内容を検査してタスクと根拠リンクを記録する。">
 

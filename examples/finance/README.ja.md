@@ -10,7 +10,9 @@
 
 **[▶ オントロジーの捜査型分析解説｜金融編（日本語音声・6:40）](https://www.youtube.com/watch?v=8JwF0oU-idc)**
 
-[![オントロジーの捜査型分析解説｜金融編](https://i.ytimg.com/vi/8JwF0oU-idc/mqdefault.jpg)](https://www.youtube.com/watch?v=8JwF0oU-idc)
+<a href="https://www.youtube.com/watch?v=8JwF0oU-idc">
+  <img src="https://i.ytimg.com/vi/8JwF0oU-idc/maxresdefault.jpg" alt="オントロジーの捜査型分析解説｜金融編" width="640">
+</a>
 
 <img src="./assets/ontology-overview.ja.png" alt="金融のオントロジー全体図。Account と Transfer の間に outgoing・incoming のリンクを持つ。recipientSummary が調査範囲内の受取口座の指標と根拠を求め、openInvestigation が対象口座・起点口座・根拠取引と結びつく ontology-owned な Investigation を記録する。">
 
