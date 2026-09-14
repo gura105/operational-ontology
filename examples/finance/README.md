@@ -8,6 +8,10 @@ On the morning of September 8, a financial institution's transaction monitoring 
 
 The demo compares recipients, narrows down the accounts and transfers to examine, and creates an investigation case for checking invoices and payment purposes. The morning deposit report is a premise of the story; the implementation does not include those deposit records or an anomaly detector.
 
+**[▶ Ontology: Investigative Analysis Explained | Finance (English narration, 6:36)](https://www.youtube.com/watch?v=4urBRngmnuA)**
+
+[![Ontology: Investigative Analysis Explained | Finance](https://i.ytimg.com/vi/4urBRngmnuA/mqdefault.jpg)](https://www.youtube.com/watch?v=4urBRngmnuA)
+
 <img src="./assets/ontology-overview.png" alt="Finance ontology: Account has separate outgoing and incoming links to Transfer. recipientSummary computes scoped recipient metrics and evidence. openInvestigation records an ontology-owned Investigation linked to the target account, origin accounts and evidence transfers.">
 
 Gray: source-backed state. Orange: ontology-owned state. The diagram shows all object and link types, with selected properties. [Editable SVG](./assets/ontology-overview.svg).
