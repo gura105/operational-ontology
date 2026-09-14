@@ -30,6 +30,8 @@ pnpm test    # 振る舞いを検証する
 - `assignOrder` と `addOrderNote` がオントロジー自身の状態を保存する。再インデックスでソースのデータが更新されても、担当者とメモは残る。
 - 適用も拒否も含め、アクションの試行が監査ログに残る。
 
+https://github.com/user-attachments/assets/02bb8ca0-a476-4e33-b0ea-25c46c6e9dda
+
 次の3例では、関係と条件から対応対象を探し、判断とその根拠を残すところまで辿ります。
 
 | 例 | 業務上の問いと対応 | 実行 |
@@ -39,8 +41,6 @@ pnpm test    # 振る舞いを検証する
 | [金融](./examples/finance/README.ja.md) | 対象口座に共通する受取先はどこか。根拠取引とともに調査ケースを記録する。 | `pnpm demo:finance` |
 
 いずれも架空のデータを使い、集合の探索とモデルに定義した業務ルールを組み合わせます。候補や共通する関係が見つかっただけでは、判断の確定や業務状態の変更にはなりません。
-
-https://github.com/user-attachments/assets/02bb8ca0-a476-4e33-b0ea-25c46c6e9dda
 
 ## なぜ Operational Ontology を定義するのか
 
