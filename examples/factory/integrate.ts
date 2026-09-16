@@ -8,7 +8,9 @@ export function integrate({ mes, wms }: FactoryDbs) {
   return {
     objects: {
       Equipment: rows(mes, 'SELECT id, inspection, inspected_at AS inspectedAt FROM equipment'),
-      Lot: rows(mes, 'SELECT id, family, units, manufactured_at AS manufacturedAt, release_inspection AS releaseInspection FROM lot'),
+      Product: rows(mes, 'SELECT id, name, past_pressure_issue AS pastPressureIssue FROM product')
+        .map((row) => ({ ...row, pastPressureIssue: row.pastPressureIssue === 1 })),
+      Lot: rows(mes, 'SELECT id, units, manufactured_at AS manufacturedAt, release_inspection AS releaseInspection FROM lot'),
       Customer: rows(wms, 'SELECT id, name, region FROM customer'),
       Shipment: rows(wms, 'SELECT id, status, shipped_at AS shippedAt FROM shipment'),
       // Quantity belongs to a shipment line, not to a bare Lot → Shipment link.
@@ -16,6 +18,7 @@ export function integrate({ mes, wms }: FactoryDbs) {
     },
     links: {
       producedOn: pairs(mes, 'SELECT equipment_id, lot_id FROM production'),
+      productLots: pairs(mes, 'SELECT product_id, id FROM lot'),
       lotLines: pairs(wms, 'SELECT lot_id, id FROM shipment_line'),
       shipmentLines: pairs(wms, 'SELECT shipment_id, id FROM shipment_line'),
       customerShipments: pairs(wms, 'SELECT customer_id, id FROM shipment'),

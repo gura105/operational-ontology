@@ -6,17 +6,20 @@ export function createFixtures() {
   mes.exec(`
     CREATE TABLE equipment (id TEXT PRIMARY KEY,
       inspection TEXT DEFAULT 'clear', inspected_at TEXT DEFAULT '2026-09-08T09:00:00+09:00');
-    CREATE TABLE lot (id TEXT PRIMARY KEY, family TEXT, units INTEGER, manufactured_at TEXT,
+    CREATE TABLE product (id TEXT PRIMARY KEY, name TEXT, past_pressure_issue INTEGER);
+    CREATE TABLE lot (id TEXT PRIMARY KEY, product_id TEXT, units INTEGER, manufactured_at TEXT,
       release_inspection TEXT DEFAULT 'passed');
     CREATE TABLE production (equipment_id TEXT, lot_id TEXT, PRIMARY KEY (equipment_id, lot_id));
     INSERT INTO equipment (id) VALUES ('PRESS-1'), ('PRESS-3'), ('OVEN-1');
-    UPDATE equipment SET inspection = 'anomaly' WHERE id = 'PRESS-1';
+    UPDATE equipment SET inspection = 'pressure-anomaly' WHERE id = 'PRESS-1';
+    -- Catalog history concerns earlier lots of the same, unchanged product specification.
+    INSERT INTO product VALUES ('P-A', 'Bracket A', 1), ('P-B', 'Bracket B', 0);
     -- Release inspections passed; the later equipment finding makes these lots suspect, not proven defective.
-    INSERT INTO lot (id, family, units, manufactured_at) VALUES
-      ('L1', 'A', 40, '2026-09-06T09:00:00+09:00'),
-      ('L2', 'A', 30, '2026-09-05T14:00:00+09:00'),
-      ('L3', 'A', 20, '2026-09-06T11:00:00+09:00'),
-      ('L4', 'B', 50, '2026-09-06T09:00:00+09:00');
+    INSERT INTO lot (id, product_id, units, manufactured_at) VALUES
+      ('L1', 'P-A', 40, '2026-09-06T09:00:00+09:00'),
+      ('L2', 'P-A', 30, '2026-09-05T14:00:00+09:00'),
+      ('L3', 'P-B', 20, '2026-09-06T11:00:00+09:00'),
+      ('L4', 'P-A', 50, '2026-09-06T09:00:00+09:00');
     -- A lot can visit several machines. These are historical production links.
     INSERT INTO production VALUES
       ('PRESS-1', 'L1'), ('OVEN-1', 'L1'),

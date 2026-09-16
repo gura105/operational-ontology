@@ -8,76 +8,95 @@ const actor = 'user:factory-ops'
 const window = { after: '2026-09-06T00:00:00+09:00', before: '2026-09-07T00:00:00+09:00' }
 try {
   h('1. Read: an inspection finding sets the investigation scope')
-  log('Goal: find whom to contact, identify the shipped products and quantities, then record a contact task.')
-  log('September 8: an equipment inspection found an anomaly. Release inspections had passed; goods shipped September 7.')
+  log('Goal: prioritize lots using equipment findings and product history, then record a customer contact/reinspection task.')
+  log('September 8: an inspection found a pressure anomaly. Release inspections had passed; goods shipped September 7.')
   log('September 6 is the supplied investigation window, not an inferred failure interval.')
+  log('Catalog history concerns earlier lots with pressure-related issues. Product specifications are unchanged in this example.')
   const allEquipment = rt.search('Equipment', { actor })
   trace('Search Equipment: inspect the recorded findings', {}, allEquipment)
   console.table(allEquipment.objects.map(({ pk, properties }) => ({ equipment: pk, inspection: properties.inspection })))
-  const equipment = rt.filter(allEquipment, (object) => object.properties.inspection === 'anomaly')
-  trace('Filter inspection = anomaly: choose the investigation origin', { allEquipment }, equipment)
+  const equipment = rt.filter(allEquipment, (object) => object.properties.inspection === 'pressure-anomaly')
+  trace('Filter inspection = pressure-anomaly: choose the investigation origin', { allEquipment }, equipment)
 
-  h('2. Read: trace affected lots to shipped lines and customers')
+  h('2. Read: follow two independent routes to Lot sets')
   const produced = rt.pivot(equipment, 'producedOn', { actor })
   trace('Pivot producedOn (forward): Equipment → Lot', { equipment }, produced)
   console.table(produced.objects.map(({ pk, properties }) => ({ lot: pk, manufacturedAt: properties.manufacturedAt })))
-  const lots = rt.filter(produced, (object) => {
+  const equipmentLots = rt.filter(produced, (object) => {
     const time = Date.parse(object.properties.manufacturedAt as string)
     return time >= Date.parse(window.after) && time < Date.parse(window.before)
   })
-  trace(`Filter manufacturing time: ${window.after} <= time < ${window.before}`, { produced }, lots)
+  trace(`Filter manufacturing time: ${window.after} <= time < ${window.before}`, { produced }, equipmentLots)
+  showObjects('Set A: lots made on the anomalous equipment in the investigation window', equipmentLots)
   log('L2 falls outside the supplied manufacturing window.')
+  const catalog = rt.search('Product', { actor })
+  trace('Search Product: start the independent catalog route', {}, catalog)
+  console.table(catalog.objects.map(({ pk, properties }) => ({ product: pk, name: properties.name, pastPressureIssue: properties.pastPressureIssue })))
+  const products = rt.filter(catalog, (object) => object.properties.pastPressureIssue === true)
+  trace('Filter pastPressureIssue = true: select product numbers with relevant history', { catalog }, products)
+  const productLots = rt.pivot(products, 'productLots', { actor })
+  trace('Pivot productLots (forward): Product → Lot', { products }, productLots)
+  showObjects('Set B: lots of products with past pressure-related issues', productLots)
+
+  h('3. Transform: intersect the two routes to prioritize investigation')
+  const lots = rt.intersect(equipmentLots, productLots)
+  trace('Intersect A ∩ B: equipment/window lots ∩ product-history lots', { A: equipmentLots, B: productLots }, lots)
+  log('L1 meets both conditions. L2 is outside the window; L4 was made on another press.')
+  const remaining = rt.subtract(equipmentLots, lots)
+  trace('Subtract A − priority: keep the remaining equipment-related investigation scope', { A: equipmentLots, priority: lots }, remaining)
+  log('L3 remains under review. No recorded product history does not mean the lot is safe; L1 is prioritized, not confirmed defective.')
+
+  h('4. Read: trace priority lots to shipped evidence and customers')
   const lines = rt.pivot(lots, 'lotLines', { actor })
   trace('Pivot lotLines (forward): Lot → ShipmentLine', { lots }, lines)
-  showObjects('Save set A: lines from the selected lots, including unshipped goods', lines)
+  showObjects('Priority-lot lines, including unshipped goods', lines)
   const allShipments = rt.pivot(lines, 'shipmentLines', { actor })
   trace('Pivot shipmentLines (reverse): ShipmentLine → Shipment', { lines }, allShipments)
   console.table(allShipments.objects.map(({ pk, properties }) => ({ shipment: pk, status: properties.status })))
   const shipments = rt.filter(allShipments, (object) => object.properties.status === 'shipped')
   trace('Filter status = shipped: keep goods already sent', { allShipments }, shipments)
-  const customers = rt.pivot(shipments, 'customerShipments', { actor })
-  trace('Pivot customerShipments (reverse): Shipment → Customer', { shipments }, customers)
-  log('S1 and S2 converge on C1. C2 is excluded because its L2 was made September 5.')
-  log('C3 has only an unshipped part of L1, so it is not in this customer set.')
-
-  h('3. Transform: retain shipped evidence and aggregate impact')
   const packedLines = rt.pivot(shipments, 'shipmentLines', { actor })
   trace('Pivot shipmentLines (forward): return to the shipped contents', { shipments }, packedLines)
-  showObjects('Set B: contents of the shipped shipments, including unrelated lots', packedLines)
-  const shippedAffected = rt.intersect(lines, packedLines)
-  trace('Intersect A ∩ B: affected lines ∩ shipped contents', { A: lines, B: packedLines }, shippedAffected)
-  log('SL5 is affected but unshipped; SL6 is shipped but belongs to unrelated L4. Neither survives the intersection.')
+  showObjects('Shipped contents, including lots outside the priority set', packedLines)
+  const evidence = rt.intersect(lines, packedLines)
+  trace('Intersect priority-lot lines ∩ shipped contents: retain the contact evidence', { lines, packedLines }, evidence)
+  log('Exclude unshipped SL5, SL4 from remaining L3, and SL6 from another press. Evidence: SL1 and SL3.')
+  const customers = rt.pivot(shipments, 'customerShipments', { actor })
+  trace('Pivot customerShipments (reverse): Shipment → Customer', { shipments }, customers)
+  log('S1 and S2 converge on C1. C2 received out-of-window L2; C3 has only an unshipped part of L1.')
   log('\n  Aggregate: sum units on the retained ShipmentLine records')
-  showObjects('input', shippedAffected)
-  console.table(shippedAffected.objects.map(({ pk, properties }) => ({ line: pk, units: properties.units })))
-  const affectedUnits = shippedAffected.objects.reduce((sum, line) => sum + (line.properties.units as number), 0)
-  log('Units in evidence:', affectedUnits)
-  log('These are 50 shipped units: 10 + 20 + 20. The selected lots contain 60 units including 10 unshipped; the shipped shipments contain 55 including 5 from L4.')
+  showObjects('input', evidence)
+  console.table(evidence.objects.map(({ pk, properties }) => ({ line: pk, units: properties.units })))
+  const priorityUnits = evidence.objects.reduce((sum, line) => sum + (line.properties.units as number), 0)
+  log('Units in evidence:', priorityUnits)
+  log('These are 30 shipped units: 10 + 20. L1 has 40 units including 10 unshipped; S1 and S2 contain 55 including 25 from other lots.')
 
-  h('4. Write: record a customer contact task with its evidence')
+  h('5. Write: record a priority customer contact task with its evidence')
   const customer = customers.objects[0]
-  log('Contact summary:', { customer: customer.pk, lots: lots.objects.map((lot) => lot.pk), shipments: shipments.objects.length, lines: shippedAffected.objects.length, affectedUnits })
+  log('Contact summary:', { customer: customer.pk, lots: lots.objects.map((lot) => lot.pk), shipments: shipments.objects.length, lines: evidence.objects.length, priorityUnits })
   // This is the same evidence set we just intersected and summed.
   const request = {
     customerId: customer.pk, equipmentId: equipment.objects[0].pk, taskId: 'CONTACT-C1', ...window,
-    lineIds: shippedAffected.objects.map((line) => line.pk),
-    reason: 'Review reinspection and customer contact for potentially affected shipments; product defects are not confirmed',
+    lineIds: evidence.objects.map((line) => line.pk),
+    reason: 'Prioritize contact and reinspection: pressure anomaly and product history overlap. Defects are unconfirmed; other equipment-related lots remain under review.',
   }
   log('Selected customer and evidence:', request)
   log('Tasks before execution:', rt.search('ContactTask', { actor }).objects.length)
-  log('The selection is unsaved. Execution rechecks the anomaly, window, customer and shipped-line evidence against current records.')
+  log('Execution rechecks the pressure anomaly, window, product history, customer and shipped-line evidence against current records.')
   log('Create task:', rt.execute('createContactTask', request, { actor }))
   log('Task creation sends no message and does not try to hold already shipped products.')
 
-  h('5. Read: inspect the saved task and all its evidence links')
+  h('6. Read: inspect the saved task and both sources of evidence')
   const task = rt.get('ContactTask', 'CONTACT-C1', { actor })!
   log('Saved contact task:', task)
   for (const link of ['customerContacts', 'contactEquipment', 'contactLots', 'contactLines']) {
     trace(`Traverse ${link}: task → saved evidence`, { task }, rt.traverse(task, link, { actor }))
   }
-  log('Next task: use these records to prepare customer contact and review reinspection needs.')
+  const savedLots = rt.traverse(task, 'contactLots', { actor })
+  trace('Pivot productLots (reverse): saved lots → product catalog history', { savedLots }, rt.pivot(savedLots, 'productLots', { actor }))
+  log('Next: review contact/reinspection for L1 and continue investigating L3. No causal conclusion or safety clearance has been made.')
 
-  h('6. Audit log (applied AND rejected attempts)')
+  h('7. Audit log (applied AND rejected attempts)')
   for (const e of rt.auditLog()) {
     log(`  #${e.seq} ${e.status.padEnd(8)} ${e.action}(${e.target}) by ${e.actor}${e.error ? ` — ${e.error.code}` : ''}`)
   }

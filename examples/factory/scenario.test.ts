@@ -15,41 +15,53 @@ function setup(t: TestContext) {
   return app
 }
 
-test('factory investigates a supplied manufacturing window and records shipped-line evidence for one customer', (t) => {
+test('factory intersects equipment and product-history lots, then records priority shipped-line evidence', (t) => {
   const { rt, sources } = setup(t)
-  const equipment = rt.filter(rt.search('Equipment', { actor }), (object) => object.properties.inspection === 'anomaly')
+  const equipment = rt.filter(rt.search('Equipment', { actor }), (object) => object.properties.inspection === 'pressure-anomaly')
   assert.deepEqual(ids(equipment.objects), ['PRESS-1'])
-  const lots = rt.filter(rt.pivot(equipment, 'producedOn', { actor }), (object) => {
+  const equipmentLots = rt.filter(rt.pivot(equipment, 'producedOn', { actor }), (object) => {
     const time = Date.parse(object.properties.manufacturedAt as string)
     return time >= Date.parse('2026-09-06T00:00:00+09:00') && time < Date.parse('2026-09-07T00:00:00+09:00')
   })
-  assert.deepEqual(ids(lots.objects), ['L1', 'L3'])
-  assert.equal(lots.objects.every((lot) => lot.properties.releaseInspection === 'passed'), true)
-  assert.deepEqual(rt.filter(lots, (object) => object.properties.releaseInspection === 'passed'), lots)
+  assert.deepEqual(ids(equipmentLots.objects), ['L1', 'L3'])
+  assert.equal(equipmentLots.objects.every((lot) => lot.properties.releaseInspection === 'passed'), true)
+  const products = rt.filter(rt.search('Product', { actor }), (object) => object.properties.pastPressureIssue === true)
+  assert.deepEqual(ids(products.objects), ['P-A'])
+  const productLots = rt.pivot(products, 'productLots', { actor })
+  assert.deepEqual(ids(productLots.objects), ['L1', 'L2', 'L4'])
+  const lots = rt.intersect(equipmentLots, productLots)
+  assert.deepEqual(ids(lots.objects), ['L1'])
+  assert.deepEqual(ids(rt.subtract(equipmentLots, lots).objects), ['L3'], 'not prioritized does not mean cleared of suspicion')
   const affected = rt.pivot(lots, 'lotLines', { actor })
-  assert.deepEqual(ids(affected.objects), ['SL1', 'SL3', 'SL5', 'SL4'])
+  assert.deepEqual(ids(affected.objects), ['SL1', 'SL3', 'SL5'])
   const shipments = rt.filter(rt.pivot(affected, 'shipmentLines', { actor }), (object) => object.properties.status === 'shipped')
   const lines = rt.intersect(affected, rt.pivot(shipments, 'shipmentLines', { actor }))
-  assert.deepEqual(ids(lines.objects), ['SL1', 'SL3', 'SL4'])
-  assert.equal(lines.objects.reduce((sum, line) => sum + (line.properties.units as number), 0), 50)
+  assert.deepEqual(ids(lines.objects), ['SL1', 'SL3'])
+  assert.equal(lines.objects.reduce((sum, line) => sum + (line.properties.units as number), 0), 30)
   assert.deepEqual(ids(shipments.objects), ['S1', 'S2'])
   assert.equal(shipments.objects.every((s) => s.properties.status === 'shipped'), true)
   assert.deepEqual(ids(rt.pivot(shipments, 'customerShipments', { actor }).objects), ['C1'])
   const params = {
-    customerId: 'C1', equipmentId: 'PRESS-1', taskId: 'TASK1', reason: 'Review contact and reinspection',
+    customerId: 'C1', equipmentId: 'PRESS-1', taskId: 'TASK1', reason: 'Prioritize contact and reinspection using pressure-related product history',
     after: '2026-09-06T00:00:00+09:00', before: '2026-09-07T00:00:00+09:00', lineIds: ids(lines.objects),
   }
   assert.deepEqual(rt.auditLog(), [])
   assert.equal(rt.search('ContactTask', { actor }).objects.length, 0)
-  for (const lineIds of [['SL2'], ['SL5'], ['SL6'], ['SL1', 'SL1']]) {
-    assert.equal(rt.execute('createContactTask', { ...params, lineIds }, { actor }).ok, false)
+  // Wrong date, no matching product history, unshipped, wrong equipment, and duplicates.
+  for (const lineIds of [['SL2'], ['SL4'], ['SL5'], ['SL6'], ['SL1', 'SL4'], ['SL1', 'SL1']]) {
+    const result = rt.execute('createContactTask', { ...params, lineIds }, { actor })
+    assert.equal(result.ok, false)
+    if (!result.ok) assert.equal(result.error.code, 'INVALID_EVIDENCE')
   }
+  assert.equal(rt.execute('createContactTask', { ...params, customerId: 'C2' }, { actor }).ok, false)
   assert.equal(rt.search('ContactTask', { actor }).objects.length, 0)
   assert.equal(rt.execute('createContactTask', params, { actor }).ok, true)
   rt.load(integrate(sources))
   const task = rt.get('ContactTask', 'TASK1', { actor })!
-  assert.deepEqual(ids(rt.traverse(task, 'contactLots', { actor }).objects), ['L1', 'L3'])
-  assert.deepEqual(ids(rt.traverse(task, 'contactLines', { actor }).objects), ['SL1', 'SL3', 'SL4'])
+  const savedLots = rt.traverse(task, 'contactLots', { actor })
+  assert.deepEqual(ids(savedLots.objects), ['L1'])
+  assert.deepEqual(ids(rt.pivot(savedLots, 'productLots', { actor }).objects), ['P-A'])
+  assert.deepEqual(ids(rt.traverse(task, 'contactLines', { actor }).objects), ['SL1', 'SL3'])
   assert.deepEqual(ids(rt.traverse(task, 'customerContacts', { actor }).objects), ['C1'])
   assert.equal(rt.auditLog({ status: 'applied' }).length, 1)
 })
@@ -70,7 +82,7 @@ for (const status of ['pending', 'held']) {
     const { rt, sources } = setup(t)
     sources.wms.prepare('UPDATE shipment SET status = ?, shipped_at = NULL WHERE id = ?').run(status, 'S2')
     rt.load(integrate(sources))
-    const lots = objectSet('Lot', ['L1', 'L3'].map((id) => rt.get('Lot', id, { actor })!))
+    const lots = objectSet('Lot', [rt.get('Lot', 'L1', { actor })!])
     const affected = rt.pivot(lots, 'lotLines', { actor })
     const shipments = rt.filter(rt.pivot(affected, 'shipmentLines', { actor }), (object) => object.properties.status === 'shipped')
     const evidence = rt.intersect(affected, rt.pivot(shipments, 'shipmentLines', { actor }))
@@ -93,7 +105,26 @@ for (const status of ['pending', 'held']) {
   })
 }
 
-test('MCP clients discover factory evidence through client filters, pivots and intersection before recording it', async (t) => {
+test('factory rechecks product history and lot-to-product links when a saved selection becomes stale', (t) => {
+  const { rt, sources } = setup(t)
+  const params = {
+    customerId: 'C1', equipmentId: 'PRESS-1', taskId: 'STALE', reason: 'Prioritize reinspection',
+    after: '2026-09-06T00:00:00+09:00', before: '2026-09-07T00:00:00+09:00', lineIds: ['SL1', 'SL3'],
+  }
+  // The selected line IDs stay the same; the evidence on the catalog route changes.
+  sources.mes.prepare("UPDATE product SET past_pressure_issue = 0 WHERE id = 'P-A'").run()
+  rt.load(integrate(sources))
+  assert.equal(rt.execute('createContactTask', params, { actor }).ok, false)
+  sources.mes.prepare("UPDATE product SET past_pressure_issue = 1 WHERE id = 'P-A'").run()
+  sources.mes.prepare("UPDATE lot SET product_id = 'P-B' WHERE id = 'L1'").run()
+  rt.load(integrate(sources))
+  assert.equal(rt.execute('createContactTask', params, { actor }).ok, false)
+  assert.equal(rt.get('ContactTask', 'STALE', { actor }), undefined)
+  assert.equal(rt.traverse(rt.get('Customer', 'C1', { actor })!, 'customerContacts', { actor }).objects.length, 0)
+  assert.deepEqual(rt.auditLog().map((entry) => entry.status), ['rejected', 'rejected'])
+})
+
+test('MCP clients intersect independent equipment/catalog routes and preserve the remaining investigation scope', async (t) => {
   const app = setup(t)
   const server = buildMcpServer(app.rt, { agent: 'investigator' })
   const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair()
@@ -111,27 +142,36 @@ test('MCP clients discover factory evidence through client filters, pivots and i
   const window = { after: '2026-09-06T00:00:00+09:00', before: '2026-09-07T00:00:00+09:00' }
   const allEquipment = await call<ObjectSet>('search_equipment', {})
   // These predicates run in the client; selected IDs return to the server.
-  const equipment = allEquipment.objects.filter((object) => object.properties.inspection === 'anomaly')
+  const equipment = allEquipment.objects.filter((object) => object.properties.inspection === 'pressure-anomaly')
   const produced = await call<ObjectSet>('pivot_produced_on', { source: { type: 'Equipment', pks: ids(equipment) } })
-  const lots = produced.objects.filter((object) => {
+  const equipmentLots = produced.objects.filter((object) => {
     const time = Date.parse(object.properties.manufacturedAt as string)
     return time >= Date.parse(window.after) && time < Date.parse(window.before)
   })
-  const lines = await call<ObjectSet>('pivot_lot_lines', { source: { type: 'Lot', pks: ids(lots) } })
+  const catalog = await call<ObjectSet>('search_product', {})
+  const products = catalog.objects.filter((object) => object.properties.pastPressureIssue === true)
+  const productLots = await call<ObjectSet>('pivot_product_lots', { source: { type: 'Product', pks: ids(products) } })
+  assert.deepEqual(ids(equipmentLots), ['L1', 'L3'])
+  assert.deepEqual(ids(productLots.objects), ['L1', 'L2', 'L4'])
+  const lots = await call<ObjectSet>('intersect_lot', { left: ids(equipmentLots), right: ids(productLots.objects) })
+  assert.deepEqual(ids(lots.objects), ['L1'])
+  const remaining = await call<ObjectSet>('subtract_lot', { left: ids(equipmentLots), right: ids(lots.objects) })
+  assert.deepEqual(ids(remaining.objects), ['L3'])
+  const lines = await call<ObjectSet>('pivot_lot_lines', { source: { type: 'Lot', pks: ids(lots.objects) } })
   const allShipments = await call<ObjectSet>('pivot_shipment_lines', { source: { type: 'ShipmentLine', pks: ids(lines.objects) } })
   const shipments = allShipments.objects.filter((object) => object.properties.status === 'shipped')
   const customers = await call<ObjectSet>('pivot_customer_shipments', { source: { type: 'Shipment', pks: ids(shipments) } })
   assert.deepEqual(ids(customers.objects), ['C1'])
   const packed = await call<ObjectSet>('pivot_shipment_lines', { source: { type: 'Shipment', pks: ids(shipments) } })
   const evidence = await call<ObjectSet>('intersect_shipment_line', { left: ids(lines.objects), right: ids(packed.objects) })
-  assert.deepEqual(ids(evidence.objects), ['SL1', 'SL3', 'SL4'])
-  assert.equal(evidence.objects.reduce((sum, line) => sum + (line.properties.units as number), 0), 50)
+  assert.deepEqual(ids(evidence.objects), ['SL1', 'SL3'])
+  assert.equal(evidence.objects.reduce((sum, line) => sum + (line.properties.units as number), 0), 30)
   assert.deepEqual(app.rt.auditLog(), [])
   await call('create_contact_task', {
     customerId: customers.objects[0].pk, equipmentId: equipment[0].pk, taskId: 'MCP-CONTACT', ...window,
-    lineIds: ids(evidence.objects), reason: 'Review contact and reinspection',
+    lineIds: ids(evidence.objects), reason: 'Prioritize reinspection using equipment and product-history evidence',
   })
   const task = app.rt.get('ContactTask', 'MCP-CONTACT', { actor })!
-  assert.deepEqual(ids(app.rt.traverse(task, 'contactLines', { actor }).objects), ['SL1', 'SL3', 'SL4'])
+  assert.deepEqual(ids(app.rt.traverse(task, 'contactLines', { actor }).objects), ['SL1', 'SL3'])
   assert.deepEqual(app.rt.auditLog().map((entry) => [entry.status, entry.actor]), [['applied', 'agent:investigator']])
 })
