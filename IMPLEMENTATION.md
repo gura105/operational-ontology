@@ -161,7 +161,7 @@ Function implementations must use the caller's actor for their reads and must no
 
 Candidate evaluation and Action preconditions can share ordinary model functions. A Function can return eligibility or proposed changes; the Action checks business conditions and the edit plan against current indexed state when it executes. Function results do not reserve resources or guarantee the validity of the complete edit plan.
 
-The examples show [customer impact and contact tasks](./examples/factory/README.md), [candidate evaluation and allocation](./examples/hospital/README.md), and [recipient summaries and investigation cases](./examples/finance/README.md). They document how exploration supplies Action evidence, how Functions evaluate candidates or compare metrics, and how Actions recheck and save selections. Stored evidence links retain record identities, not immutable copies of source record contents.
+The examples show [intersecting equipment/product evidence and recording contact tasks](./examples/factory/README.md), [candidate evaluation and allocation](./examples/hospital/README.md), and [recipient summaries and investigation cases](./examples/finance/README.md). They document how exploration supplies Action evidence, how Functions evaluate candidates or compare metrics, and how Actions recheck and save selections. Stored evidence links retain record identities, not immutable copies of source record contents.
 
 ## The authority line, checked
 

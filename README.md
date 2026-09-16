@@ -34,7 +34,7 @@ Three further examples follow relationships and conditions to find the objects t
 
 | Example | Business question and response | Run |
 | --- | --- | --- |
-| [Factory](./examples/factory/README.md) | Which customers received potentially affected lots? Create a contact/reinspection task. | `pnpm demo:factory` |
+| [Factory](./examples/factory/README.md) | Which lots share equipment findings and product issue history? Prioritize them and record customer contact/reinspection. | `pnpm demo:factory` |
 | [Hospital](./examples/hospital/README.md) | Which bed and nurse meet a patient's requirements? Record a provisional allocation. | `pnpm demo:hospital` |
 | [Finance](./examples/finance/README.md) | Which recipients are shared by selected accounts? Record a case and its evidence transfers. | `pnpm demo:finance` |
 

@@ -161,7 +161,7 @@ Function の実装は読み取りに呼び出し元の actor を使い、書き�
 
 候補の評価と Action の事前条件は、モデル内の普通の評価関数を共有できます。Function が適合条件や変更予定を返し、Action は実行時点のインデックスに対して業務条件と編集プランを検査します。Function の結果は資源の予約や、編集プラン全体の妥当性の保証にはなりません。
 
-具体例は、[顧客への影響と連絡タスク](./examples/factory/README.ja.md)、[候補評価と仮割当](./examples/hospital/README.ja.md)、[受取先の集計と調査ケース](./examples/finance/README.ja.md)を参照してください。探索で Action の根拠を見つける流れ、Function による候補評価や指標比較、Action による選択内容の再検査と保存を説明しています。根拠リンクが保存するのはレコードの同一性であり、ソースの内容を過去のまま固定したコピーではありません。
+具体例は、[設備・品番の根拠の交差と連絡タスク](./examples/factory/README.ja.md)、[候補評価と仮割当](./examples/hospital/README.ja.md)、[受取先の集計と調査ケース](./examples/finance/README.ja.md)を参照してください。探索で Action の根拠を見つける流れ、Function による候補評価や指標比較、Action による選択内容の再検査と保存を説明しています。根拠リンクが保存するのはレコードの同一性であり、ソースの内容を過去のまま固定したコピーではありません。
 
 ## Authority の検査
 

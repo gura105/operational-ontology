@@ -1,6 +1,6 @@
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1200 1230" role="img" aria-labelledby="title desc">
-  <title id="title">Factory: trace shipments, record the response</title>
-  <desc id="desc">Factory schema with all six object types and eight declared links. Gray indicates source-backed state; orange indicates ontology-owned state. Filter and pivot find customers; intersection retains shipped-line evidence for summing units. createContactTask rechecks that evidence and creates a task with customer, equipment, lot and line links. Properties are selected, not exhaustive.</desc>
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1200 1400" role="img" aria-labelledby="title desc">
+  <title id="title">Factory: intersect two routes, prioritize contact</title>
+  <desc id="desc">Factory schema with all seven object types and nine declared links. Gray indicates source-backed state; orange indicates ontology-owned state. Equipment and Product routes produce Lot sets; their intersection prioritizes L1 while L3 remains under review. Thirty shipped units reach C1. createContactTask rechecks equipment, product history and shipped evidence. Properties are selected, not exhaustive.</desc>
   <!-- Edit this SVG, then export its PNG at 2x with:
        rsvg-convert -w 2400 -o ontology-overview.png ontology-overview.svg -->
   <defs>
@@ -8,12 +8,24 @@
     <marker id="arrow-gray" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M 0 0 L 10 5 L 0 10 Z" fill="#5B626B"/></marker>
     <marker id="arrow-orange" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M 0 0 L 10 5 L 0 10 Z" fill="#C96A00"/></marker>
   </defs>
-  <rect x="0" y="0" width="1200" height="1230" rx="0" fill="#FFFFFF"/>
-  <text x="54" y="65" text-anchor="start" font-size="29" font-weight="760" fill="#20242A">Factory: trace shipments, record the response</text>
-  <text x="54" y="101" text-anchor="start" font-size="19" font-weight="500" fill="#747B84">6 object types · 8 link types · 1 Action</text>
-  <rect x="54" y="140" width="1092" height="630" rx="30" fill="#FFFFFF" stroke="#20242A" stroke-width="3"/>
+  <rect x="0" y="0" width="1200" height="1400" rx="0" fill="#FFFFFF"/>
+  <text x="54" y="65" text-anchor="start" font-size="29" font-weight="760" fill="#20242A">Factory: intersect two routes, prioritize contact</text>
+  <text x="54" y="101" text-anchor="start" font-size="19" font-weight="500" fill="#747B84">7 object types · 9 link types · 1 Action</text>
+  <rect x="54" y="140" width="1092" height="800" rx="30" fill="#FFFFFF" stroke="#20242A" stroke-width="3"/>
   <text x="84" y="183" text-anchor="start" font-size="17" font-weight="760" fill="#20242A" letter-spacing="1.2">OBJECT TYPES &amp; LINKS</text>
   <text x="1116" y="183" text-anchor="end" font-size="16" font-weight="500" fill="#747B84">Selected properties · primary key: id</text>
+  <g data-object="Product" data-properties="name pastPressureIssue">
+  <rect x="488" y="230" width="234" height="105" rx="21" fill="#F8F9FA" stroke="#343A42" stroke-width="2.5"/>
+  <text x="508" y="265" text-anchor="start" font-size="23" font-weight="730" fill="#20242A">Product</text>
+  <text x="508" y="294" text-anchor="start" font-size="17" font-weight="500" fill="#5B626B">name</text>
+  <text x="508" y="318" text-anchor="start" font-size="17" font-weight="500" fill="#5B626B">pastPressureIssue</text>
+  </g>
+  <g data-link="productLots" data-from="Product" data-to="Lot" data-kind="one-to-many">
+  <path d="M 605 335 V 400" fill="none" stroke="#5B626B" stroke-width="2.8" stroke-linecap="round" marker-end="url(#arrow-gray)"/>
+  <text x="625" y="362" text-anchor="start" font-size="17" font-weight="650" fill="#5B626B">productLots</text>
+  <text x="625" y="386" text-anchor="start" font-size="15" font-weight="500" fill="#747B84">1:N</text>
+  </g>
+  <g transform="translate(0 170)">
   <!-- Schema arrows are declared from → to; they are not an exploration sequence. -->
   <g data-link="producedOn" data-from="Equipment" data-to="Lot" data-kind="many-to-many">
   <path d="M 328 282 H 488" fill="none" stroke="#5B626B" stroke-width="2.8" stroke-linecap="round" stroke-linejoin="round" marker-end="url(#arrow-gray)"/>
@@ -63,10 +75,10 @@
   <text x="114" y="294" text-anchor="start" font-size="17" font-weight="500" fill="#5B626B">inspection</text>
   <text x="114" y="318" text-anchor="start" font-size="17" font-weight="500" fill="#5B626B">inspectedAt</text>
   </g>
-  <g data-object="Lot" data-properties="family units manufacturedAt">
+  <g data-object="Lot" data-properties="units manufacturedAt">
   <rect x="488" y="230" width="234" height="105" rx="21" fill="#F8F9FA" stroke="#343A42" stroke-width="2.5"/>
   <text x="508" y="265" text-anchor="start" font-size="23" font-weight="730" fill="#20242A">Lot</text>
-  <text x="508" y="294" text-anchor="start" font-size="17" font-weight="500" fill="#5B626B">family · units</text>
+  <text x="508" y="294" text-anchor="start" font-size="17" font-weight="500" fill="#5B626B">units</text>
   <text x="508" y="318" text-anchor="start" font-size="17" font-weight="500" fill="#5B626B">manufacturedAt</text>
   </g>
   <g data-object="ShipmentLine" data-properties="units">
@@ -104,22 +116,23 @@
   <text x="80" y="872" text-anchor="start" font-size="16" font-weight="750" fill="#5B626B" letter-spacing="1">DEMO · EXPLORE THE EVIDENCE</text>
   <path d="M 644 853 L 656 866 L 644 879 L 632 866 Z" fill="#FFFFFF" stroke="#C96A00" stroke-width="2"/>
   <text x="670" y="872" text-anchor="start" font-size="16" font-weight="750" fill="#C96A00" letter-spacing="1">ACTION · RULES &amp; AUDIT</text>
-  <g data-exploration="shipped-line-evidence">
-  <text x="80" y="916" text-anchor="start" font-size="23" font-weight="730" fill="#20242A">Filter → Pivot → Intersect → Sum</text>
-  <text x="80" y="950" text-anchor="start" font-size="18" font-weight="500" fill="#5B626B">Find C1 through lots, lines and shipments.</text>
-  <text x="80" y="984" text-anchor="start" font-size="18" font-weight="500" fill="#5B626B">Selected-lot lines ∩ shipped contents</text>
-  <text x="80" y="1018" text-anchor="start" font-size="18" font-weight="500" fill="#5B626B">SL1 + SL3 + SL4: 10 + 20 + 20 = 50 units</text>
+  <g data-exploration="equipment-product-intersection">
+  <text x="80" y="916" text-anchor="start" font-size="23" font-weight="730" fill="#20242A">Intersect equipment and product lots</text>
+  <text x="80" y="950" text-anchor="start" font-size="18" font-weight="500" fill="#5B626B">A: equipment + window → L1, L3</text>
+  <text x="80" y="984" text-anchor="start" font-size="18" font-weight="500" fill="#5B626B">B: product history → L1, L2, L4</text>
+  <text x="80" y="1018" text-anchor="start" font-size="18" font-weight="500" fill="#5B626B">A ∩ B = L1; L3 remains under review.</text>
   </g>
-  <text x="80" y="1082" text-anchor="start" font-size="17" font-weight="550" fill="#5B626B">Excludes unshipped and unrelated lines.</text>
+  <text x="80" y="1082" text-anchor="start" font-size="17" font-weight="550" fill="#5B626B">Shipped L1 lines: SL1 + SL3 = 30 units.</text>
   <text x="80" y="1122" text-anchor="start" font-size="17" font-weight="550" fill="#5B626B">Pass these same line IDs to the Action.</text>
   <g data-action="createContactTask">
   <text x="636" y="916" text-anchor="start" font-size="23" font-weight="730" fill="#20242A">createContactTask</text>
   <text x="636" y="954" text-anchor="start" font-size="18" font-weight="500" fill="#5B626B">Customer + equipment + window + line IDs</text>
-  <text x="636" y="988" text-anchor="start" font-size="18" font-weight="500" fill="#5B626B">Recheck anomaly, dates and shipped evidence.</text>
+  <text x="636" y="988" text-anchor="start" font-size="18" font-weight="500" fill="#5B626B">Recheck pressure, dates, history and shipping.</text>
   <text x="636" y="1022" text-anchor="start" font-size="18" font-weight="500" fill="#5B626B">Create ContactTask + 4 owned link types.</text>
-  <text x="636" y="1056" text-anchor="start" font-size="18" font-weight="500" fill="#5B626B">Keep the selected lots and lines as evidence.</text>
+  <text x="636" y="1056" text-anchor="start" font-size="18" font-weight="500" fill="#5B626B">Saved lots lead back to product history.</text>
   <text x="636" y="1122" text-anchor="start" font-size="17" font-weight="650" fill="#C96A00">Records a task; sends no message.</text>
   </g>
-  <text x="600" y="1183" text-anchor="middle" font-size="18" font-weight="550" fill="#5B626B">Find the customer → narrow and sum evidence → record the contact task</text>
+  <text x="600" y="1183" text-anchor="middle" font-size="18" font-weight="550" fill="#5B626B">Intersect two Lot sets → trace shipped evidence → record priority contact</text>
   <text x="1146" y="1214" text-anchor="end" font-size="16" font-weight="500" fill="#747B84">Operational Ontology · factory example</text>
+  </g>
 </svg>

@@ -34,7 +34,7 @@ pnpm test    # 振る舞いを検証する
 
 | 例 | 業務上の問いと対応 | 実行 |
 | --- | --- | --- |
-| [工場](./examples/factory/README.ja.md) | 影響が疑われるロットの出荷先はどこか。顧客連絡・再検査の検討タスクを作る。 | `pnpm demo:factory` |
+| [工場](./examples/factory/README.ja.md) | 設備異常と品番の不具合履歴の両方に該当するロットはどれか。優先対象の顧客連絡・再検査を記録する。 | `pnpm demo:factory` |
 | [病院](./examples/hospital/README.ja.md) | 患者の要件を満たす病床と看護師はどれか。仮割当を記録する。 | `pnpm demo:hospital` |
 | [金融](./examples/finance/README.ja.md) | 対象口座に共通する受取先はどこか。根拠取引とともに調査ケースを記録する。 | `pnpm demo:finance` |
 
