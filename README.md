@@ -131,12 +131,13 @@ Calling `execute('cancelOrder', …)` loads the target and checks the rule. For 
 
 ## Use cases: data-driven operations
 
-An equipment anomaly, a patient admission request, a transaction alert. Operational teams respond by bringing information together, deciding who or what to act on and on what evidence, and repeating those decisions and actions as conditions change. We call this workflow **data-driven operations**.
+A product recall, an equipment anomaly, a patient admission request, a transaction alert. Operational teams respond by bringing information together, deciding who or what to act on and on what evidence, and repeating those decisions and actions as conditions change. We call this workflow **data-driven operations**.
 
-The three examples below use Operational Ontology to identify the objects to act on and the supporting evidence, then use an Action to recheck conditions and record a task, provisional allocation, or investigation case.
+The four examples below use Operational Ontology to identify the objects to act on and the supporting evidence, then use an Action to recheck conditions and record a task, provisional allocation, or investigation case.
 
 | Example | Business question and response | Run |
 | --- | --- | --- |
+| [Recall](./examples/recall/README.md) | Which customers already received the defective product? Record an exchange-contact task, refusing duplicates. | `pnpm demo:recall` |
 | [Factory](./examples/factory/README.md) | Which customers received potentially affected lots? Create a contact/reinspection task. | `pnpm demo:factory` |
 | [Hospital](./examples/hospital/README.md) | Which bed and nurse meet a patient's requirements? Record a provisional allocation. | `pnpm demo:hospital` |
 | [Finance](./examples/finance/README.md) | Which recipients are shared by selected accounts? Record a case and its evidence transfers. | `pnpm demo:finance` |
