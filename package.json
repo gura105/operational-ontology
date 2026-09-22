@@ -9,10 +9,12 @@
     "demo:factory": "tsx examples/factory/demo.ts",
     "demo:hospital": "tsx examples/hospital/demo.ts",
     "demo:finance": "tsx examples/finance/demo.ts",
+    "demo:recall": "tsx examples/recall/demo.ts",
     "mcp": "tsx examples/orders/mcp-server.ts",
     "mcp:factory": "tsx examples/factory/mcp-server.ts",
     "mcp:hospital": "tsx examples/hospital/mcp-server.ts",
     "mcp:finance": "tsx examples/finance/mcp-server.ts",
+    "mcp:recall": "tsx examples/recall/mcp-server.ts",
     "agent": "claude --strict-mcp-config --mcp-config=.mcp.json",
     "test": "tsx --test tests/*.test.ts examples/*/*.test.ts",
     "typecheck": "tsc --noEmit"
