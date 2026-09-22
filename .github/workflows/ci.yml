@@ -27,4 +27,5 @@ jobs:
       - run: pnpm demo:factory
       - run: pnpm demo:hospital
       - run: pnpm demo:finance
+      - run: pnpm demo:recall
       - run: node --test .github/scripts/*.test.mjs

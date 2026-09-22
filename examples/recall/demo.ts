@@ -78,6 +78,8 @@ try {
   if (uncovered.length) log('  without a task:', uncovered.map((customer) => customer.pk))
   log(`${customers.objects.length - uncovered.length}/${customers.objects.length} customers have a recall task.`)
 
+  log('Task coverage only; customer contact and exchange completion are not recorded.')
+
   h('6. Audit log (applied AND rejected attempts)')
   const audit = rt.auditLog()
   for (const entry of audit) {
@@ -86,7 +88,7 @@ try {
   log(`${audit.length} audit entries: applied ${audit.filter((entry) => entry.status === 'applied').length}, rejected ${audit.filter((entry) => entry.status === 'rejected').length}.`)
 
   pause()
-  log('\nThe duplicate check lives in the ontology, so the twenty-seventh call meets the same rule as the first.')
+  log('\nThe check for existing tasks lives in the ontology, so the twenty-seventh call meets the same rule as the first.')
 } finally {
   app.close()
 }

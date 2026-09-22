@@ -137,7 +137,7 @@ The four examples below use Operational Ontology to identify the objects to act 
 
 | Example | Business question and response | Run |
 | --- | --- | --- |
-| [Recall](./examples/recall/README.md) | Which customers already received the defective product? Record an exchange-contact task, refusing duplicates. | `pnpm demo:recall` |
+| [Recall](./examples/recall/README.md) | Which customers have shipped orders containing the defective product? Record an exchange-contact task, refusing duplicate tasks. | `pnpm demo:recall` |
 | [Factory](./examples/factory/README.md) | Which customers received potentially affected lots? Create a contact/reinspection task. | `pnpm demo:factory` |
 | [Hospital](./examples/hospital/README.md) | Which bed and nurse meet a patient's requirements? Record a provisional allocation. | `pnpm demo:hospital` |
 | [Finance](./examples/finance/README.md) | Which recipients are shared by selected accounts? Record a case and its evidence transfers. | `pnpm demo:finance` |

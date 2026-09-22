@@ -30,7 +30,7 @@ export function createRecall() {
     const result = rt.execute('createRecallTask', {
       taskId: `RT-PHONE-${index + 1}`, customerId: customer.pk, productId: product.pk,
       orderIds: evidence.objects.map((order) => order.pk),
-      note: 'Customer phoned about keyboard defect; exchange arranged',
+      note: 'Customer phoned about keyboard defect; exchange follow-up requested',
       recordedOn: '2026-09-09', author: 'cs-phone',
     }, { actor })
     if (!result.ok) throw new Error(`failed to seed ${customer.pk}: ${result.error.code}`)

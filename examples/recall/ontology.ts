@@ -58,7 +58,7 @@ export function createRecallOntology(read: () => RecallRead) {
     ...schema,
     actions: {
       createRecallTask: defineAction(objects, {
-        description: 'Record an exchange-contact task for a customer who received the recalled product. Refuses a second task for the same customer and product. Sends no message.',
+        description: 'Record an exchange-contact task for a customer with shipped orders containing the recalled product. Refuses a second task for the same customer and product. Does not send a message or record contact completion.',
         object: 'Customer', targetParam: 'customerId',
         params: {
           taskId: z.string().min(1), customerId: z.string(), productId: z.string(),
@@ -75,7 +75,7 @@ export function createRecallOntology(read: () => RecallRead) {
             const customerTasks = read().traverse(object, 'customerRecallTasks', { actor })
             const productTasks = read().traverse(product, 'productRecallTasks', { actor })
             if (read().intersect(customerTasks, productTasks).objects.length > 0) {
-              return reject('ALREADY_CONTACTED', `customer ${object.pk} already has a recall task for ${params.productId}`)
+              return reject('RECALL_TASK_ALREADY_EXISTS', `customer ${object.pk} already has a recall task for ${params.productId}`)
             }
           },
           ({ object, params, actor }) => {

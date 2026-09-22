@@ -40,7 +40,7 @@ test('recall starts with yesterday\'s calls and finds the exact shipped keyboard
   assert.equal(rt.pivot(shipped, 'customerOrders', { actor }).objects.length, KEYBOARD_CUSTOMERS)
 })
 
-test('recall contacts every shipped customer once and preserves each task\'s order evidence', (t) => {
+test('recall records one task per affected customer and preserves each task\'s order evidence', (t) => {
   const { rt, seededCustomerIds } = setup(t)
   const product = rt.get('Product', 'ITM-101', { actor })!
   const keyboardOrders = rt.traverse(product, 'orderProducts', { actor })
@@ -60,7 +60,7 @@ test('recall contacts every shipped customer once and preserves each task\'s ord
     }, { actor })
     if (result.ok) applied.push(customer.pk)
     else {
-      assert.equal(result.error.code, 'ALREADY_CONTACTED')
+      assert.equal(result.error.code, 'RECALL_TASK_ALREADY_EXISTS')
       rejected.push(customer.pk)
     }
   }
@@ -86,7 +86,7 @@ test('recall contacts every shipped customer once and preserves each task\'s ord
   assert.equal(rt.auditLog({ status: 'rejected' }).length, 3)
 })
 
-test('recall refuses unknown products, duplicate contacts and invalid order evidence', (t) => {
+test('recall refuses unknown products, duplicate tasks and invalid order evidence', (t) => {
   const { rt, seededCustomerIds } = setup(t)
   const product = rt.get('Product', 'ITM-101', { actor })!
   const keyboardOrders = rt.traverse(product, 'orderProducts', { actor })
@@ -150,11 +150,11 @@ test('recall refuses unknown products, duplicate contacts and invalid order evid
     ...base, taskId: 'APPLIED', orderIds: ids(selected.valid.objects),
   }, { actor }).ok, true)
   const duplicate = rt.execute('createRecallTask', {
-    ...base, taskId: 'REJECT-ALREADY-CONTACTED', orderIds: ids(selected.valid.objects),
+    ...base, taskId: 'REJECT-DUPLICATE-TASK', orderIds: ids(selected.valid.objects),
   }, { actor })
   assert.equal(duplicate.ok, false)
-  if (!duplicate.ok) assert.equal(duplicate.error.code, 'ALREADY_CONTACTED')
-  assert.equal(rt.get('RecallTask', 'REJECT-ALREADY-CONTACTED', { actor }), undefined)
+  if (!duplicate.ok) assert.equal(duplicate.error.code, 'RECALL_TASK_ALREADY_EXISTS')
+  assert.equal(rt.get('RecallTask', 'REJECT-DUPLICATE-TASK', { actor }), undefined)
 })
 
 test('recall tasks and their owned links survive re-indexing', (t) => {
@@ -183,7 +183,7 @@ test('recall tasks and their owned links survive re-indexing', (t) => {
   assert.equal(rt.search('RecallTask', { actor }).objects.length, 4)
 })
 
-test('MCP clients find recall customers and receive machine-readable duplicate refusals', async (t) => {
+test('MCP clients find recall customers and receive machine-readable refusals for duplicate tasks', async (t) => {
   const app = setup(t)
   const server = buildMcpServer(app.rt, { agent: 'cs-agent' })
   const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair()
@@ -229,9 +229,9 @@ test('MCP clients find recall customers and receive machine-readable duplicate r
   assert.ok(Array.isArray(refused.content))
   const refusalBlock = refused.content[0]
   assert.equal(refusalBlock.type, 'text')
-  assert.equal(JSON.parse(refusalBlock.text as string).error.code, 'ALREADY_CONTACTED')
+  assert.equal(JSON.parse(refusalBlock.text as string).error.code, 'RECALL_TASK_ALREADY_EXISTS')
 
   const audit = await call<AuditEntry[]>('read_audit_log', {})
   assert.ok(audit.some((entry) =>
-    entry.status === 'rejected' && entry.actor === 'agent:cs-agent' && entry.error?.code === 'ALREADY_CONTACTED'))
+    entry.status === 'rejected' && entry.actor === 'agent:cs-agent' && entry.error?.code === 'RECALL_TASK_ALREADY_EXISTS'))
 })
