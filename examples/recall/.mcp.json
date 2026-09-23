@@ -1,0 +1,9 @@
+{
+  "mcpServers": {
+    "recall": {
+      "command": "pnpm",
+      "args": ["mcp:recall"],
+      "env": { "OO_AGENT": "recall-demo" }
+    }
+  }
+}
