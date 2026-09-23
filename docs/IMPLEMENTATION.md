@@ -156,7 +156,7 @@ An action definition must include `preconditions`, using `[]` when there are non
 6. Write back a nonempty source-backed plan through the adapter.
 7. Commit the local edits and audit entry in one transaction.
 
-Effects describe changes as data and must be pure. `modify` changes properties, `create` creates an ontology-owned object, and `link` / `unlink` change relationships. The gate checks schemas, object existence, and cardinality before the adapter runs. One Action can accept array parameters and commit multiple edits atomically; separate Action calls are separate transactions and audit entries. These edits change instances; model definitions are code reviewed and versioned in git.
+Effects describe changes as data and must be pure. `modify` changes properties, `create` creates an object, and `link` / `unlink` change relationships. Source-backed creation requires write-back, just like source-backed modification. The gate checks schemas, object existence, and cardinality before the adapter runs. One Action can accept array parameters and commit multiple edits atomically; separate Action calls are separate transactions and audit entries. These edits change instances; model definitions are code reviewed and versioned in git.
 
 ## Model-defined functions
 
@@ -177,15 +177,22 @@ The model declares ownership in two places: `owned` on object types and links ma
 | changes source-backed state | no | refused: **`UNDECLARED_SOURCE_WRITE`** |
 | changes only ontology-owned state | yes | refused: **`MISDECLARED_WRITEBACK`** |
 | changes both kinds, within one edit or across edits | either | refused: **`MIXED_AUTHORITY`** |
-| creates an object of a source-backed type | either | refused: **`SOURCE_CREATE_UNSUPPORTED`** |
 
-The reasoning, row by row. An undeclared source write would be a local change to source-owned data that never reaches the source — exactly what property 4 forbids. A misdeclared write-back contains nothing that belongs to a source. A mixed plan is refused because this implementation routes plans whole, so an action must sit on one side of the line; split the action if it needs both. Per-edit routing is unsupported. Creating a row at the source is real — write-back could carry it — but this implementation does not demonstrate it, so it refuses rather than half-supports; creation is limited to ontology-owned types.
+The reasoning, row by row. An undeclared source write would be a local change to source-owned data that never reaches the source — exactly what property 4 forbids. A misdeclared write-back contains nothing that belongs to a source. A mixed plan is refused because this implementation routes plans whole, so an action must sit on one side of the line; split the action if it needs both. Per-edit routing is unsupported.
 
 An empty plan touches neither side of the line: no adapter call, only the audit entry is committed. An action that declares write-back but has no adapter configured is refused with **`NO_WRITEBACK_ADAPTER`**.
 
 Validity is checked before authority. The whole plan is dry-run through the commit's own code first, so a plan the store would refuse is **`INVALID_EDITS`** even if it also crosses the authority line.
 
 The four declared answers themselves are enumerable at runtime as `Runtime.declarations`, pinned by a test.
+
+### Creating source-backed objects
+
+`create(type, pk, data)` follows the type's ownership: `owned: true` creates locally; otherwise creation requires `writeback: true` and an adapter. The adapter receives the existing `create` edit, persists the source record, and returns before the runtime commits it locally. Actions still target an existing visible object; for example, an action on a Customer can create a Ticket and then a source-backed link to it in the same plan.
+
+Supply the ID in both `pk` and the primary-key property of `data`. The adapter must preserve that identity and the supplied source properties, and throw on source conflicts or rejected creation. It cannot return a source-generated ID or replacement values. Adapters implement the operations they support; the orders demo's existing adapter still only handles order cancellation. The [source-creation tests](../tests/source-create.test.ts) demonstrate an actual SQLite `INSERT`, link creation, source transaction rollback and re-indexing.
+
+For a type with `owned: { property: default }`, omit those properties from `data`, just as with `load()`. The runtime supplies their defaults locally without sending them to the adapter. Explicitly supplying an owned property, even its default, is `MIXED_AUTHORITY`; change it in a separate Action. The created row remains source-backed: subsequent snapshots replace it normally, with any later owned edits preserved through the existing overlay.
 
 ## Failure semantics in detail
 
@@ -240,6 +247,7 @@ Snapshot semantics, per loaded type: replace the base, reapply the edit layer. T
 
 ## Current limits
 
+- Creation requires an ID known before write-back; source-generated IDs and returned source values are unsupported.
 - Object deletion, link properties and composite keys are unsupported. Quantities or timestamps on a relationship can be represented by a separate object, as in the factory's shipment lines and finance's transfers.
 - Nested properties follow their Zod schemas and are not made strict by the runtime.
 - Queries use the local SQLite snapshot, with no pagination or result cap. Saved/lazy queries, automatic path history, recursive exploration, arbitrary transforms, joins, federation and runtime schema evolution are outside the implemented API.

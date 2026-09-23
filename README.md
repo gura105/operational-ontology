@@ -191,7 +191,7 @@ An implementation must declare choices that callers can observe. This one makes 
 
 The runtime demonstrates the pattern with synchronous action execution and SQLite. It includes no UI builder, pipeline framework, scalable indexing service, or general authorization system. The write gate is an API contract within the caller's process. These boundaries keep the implementation readable.
 
-Creation is limited to ontology-owned objects; deletes, link properties, and composite keys are unsupported. The [implementation notes](./docs/IMPLEMENTATION.md#current-limits) document the remaining limits and API details. Published versions are in the [release notes](https://github.com/gura105/operational-ontology/releases).
+Actions can create ontology-owned objects or source-backed records through write-back, using IDs specified before execution. Deletes, link properties, and composite keys are unsupported. The [implementation notes](./docs/IMPLEMENTATION.md#current-limits) document the remaining limits and API details. Published versions are in the [release notes](https://github.com/gura105/operational-ontology/releases).
 
 ## FAQ
 
