@@ -135,7 +135,7 @@ A product recall, an equipment anomaly, a patient admission request, a transacti
 
 The orders demo (`pnpm demo`) shows the basic structure of Operational Ontology: a shared model for data from multiple systems, combining business rules, write-back, ownership and auditing.
 
-Read the recall example next. It adds a customer-support system to the same orders model, finds customers with shipped orders, compares them with existing tickets and creates the missing tickets. ERP and support remain the systems of record while the example connects exploration to business actions in one workflow.
+Read the recall example next. It adds a customer-support system to the same orders model, finds customers with shipped orders, compares them with existing tickets and creates the missing tickets. Orders are managed in ERP and tickets in support, while the example connects exploration to business actions in one workflow.
 
 The factory, hospital and finance examples extend the applications to tracing impact, evaluating and allocating resources, and investigating through sets and aggregations.
 

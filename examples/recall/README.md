@@ -4,6 +4,10 @@
 
 On September 10, 2026, our keyboard supplier reports a defective key switch in ITM-101 and requests an exchange of affected units. Customer support needs to find customers with shipped orders and create an exchange-contact ticket for each customer who does not already have one.
 
+<img src="./assets/ontology-overview.png" alt="Recall ontology overview: Customer, Order, Product and RecallTicket are source-backed. Filter, pivot and subtract identify seven customers without tickets. createRecallTicket writes new tickets to support; re-indexing confirms all ten affected customers have tickets.">
+
+Gray shows source-backed objects and links; blue shows the Action and write-back to support. All object and link types are shown, with selected properties. [Editable SVG](./assets/ontology-overview.svg).
+
 Run the scenario from the repository root:
 
 ```sh
@@ -23,14 +27,6 @@ The example uses three separate in-memory SQLite source databases and an ontolog
 | `support` — customer-support system | Exchange-contact tickets and their customer/product references | Supplies three existing tickets and accepts new tickets |
 
 Integration normalizes the two ERPs' different schemas and status codes into `Customer`, `Order` and `Product`. `RecallTicket` represents a record in `support.tickets`.
-
-```mermaid
-flowchart LR
-  Customer -->|customerOrders| Order
-  Order -->|orderProducts| Product
-  Customer -->|customerRecallTickets| RecallTicket
-  Product -->|productRecallTickets| RecallTicket
-```
 
 All four object types and all four links are source-backed. A ticket's customer and product links come from the references on its support record. Tickets do not retain a list of order IDs. The example shares the orders model's Customer–Order–Product structure and omits its assignee, notes and visibility policy.
 

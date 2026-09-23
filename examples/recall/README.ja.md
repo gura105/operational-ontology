@@ -4,6 +4,10 @@
 
 2026年9月10日、仕入れ先のキーボード会社から「ITM-101 のキースイッチに不具合が判明したため、対象品を交換する」と連絡が来ました。カスタマーサポートは、出荷済み注文の顧客を調べ、まだチケットがない顧客の交換連絡チケットを作成します。
 
+<img src="./assets/ontology-overview.ja.png" alt="リコールのオントロジー全体図。Customer・Order・Product・RecallTicketはすべてsource-backed。filter・pivot・subtractでチケットがない7顧客を選び、createRecallTicketでサポートに起票する。再読み込み後に対象10顧客すべてにチケットがあることを確認する。">
+
+グレーはソース由来のオブジェクトとリンク、青はActionとサポートへの書き戻しです。全オブジェクト型・リンク型を示し、属性は抜粋しています。[編集用 SVG](./assets/ontology-overview.ja.svg)。
+
 リポジトリのルートで実行します。
 
 ```sh
@@ -23,14 +27,6 @@ pnpm demo:recall
 | `support`：カスタマーサポートシステム | 交換連絡チケットと顧客・商品への参照 | 既存3件を提供し、新規チケットを受け付ける |
 
 統合処理は、両ERPで異なるスキーマやステータスコードを `Customer`・`Order`・`Product` に揃えます。`RecallTicket` は `support.tickets` のレコードを表します。
-
-```mermaid
-flowchart LR
-  Customer -->|customerOrders| Order
-  Order -->|orderProducts| Product
-  Customer -->|customerRecallTickets| RecallTicket
-  Product -->|productRecallTickets| RecallTicket
-```
 
 4種類のオブジェクトと4種類のリンクは、すべてsource-backedです。チケットから顧客・商品への関連は、サポート側のレコードにある参照から読み込みます。チケットには注文ID一覧を保持しません。orders例とCustomer–Order–Productの構造を共有し、担当者・ノート・visibilityの設定は省いています。
 
