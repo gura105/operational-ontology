@@ -49,13 +49,13 @@ export function integrate({ north, south, support }: RecallDbs) {
     objects: {
       Customer: customers, Order: orders.map((order) => order.row), Product: products,
       RecallTicket: tickets.map((ticket) => ({
-        id: ticket.id, note: ticket.note, recordedOn: ticket.recorded_on, author: ticket.author,
+        id: ticket.id, productId: ticket.product_id,
+        note: ticket.note, recordedOn: ticket.recorded_on, author: ticket.author,
       })),
     },
     links: {
       customerOrders, orderProducts,
       customerRecallTickets: tickets.map((ticket): [string, string] => [ticket.customer_id, ticket.id]),
-      productRecallTickets: tickets.map((ticket): [string, string] => [ticket.product_id, ticket.id]),
     },
   }
 }

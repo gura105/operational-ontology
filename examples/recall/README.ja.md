@@ -28,7 +28,7 @@ pnpm demo:recall
 
 統合処理は、両ERPで異なるスキーマやステータスコードを `Customer`・`Order`・`Product` に揃えます。`RecallTicket` は `support.tickets` のレコードを表します。
 
-4種類のオブジェクトと4種類のリンクは、すべてsource-backedです。チケットから顧客・商品への関連は、サポート側のレコードにある参照から読み込みます。チケットには注文ID一覧を保持しません。orders例とCustomer–Order–Productの構造を共有し、担当者・ノート・visibilityの設定は省いています。
+4種類のオブジェクトと3種類のリンクは、すべてsource-backedです。チケットの顧客リンクはサポート側の `customer_id` から、`productId` 属性は `product_id` から読み込みます。チケットには注文ID一覧を保持しません。orders例とCustomer–Order–Productの構造を共有し、担当者・ノート・visibilityの設定は省いています。
 
 ## 1. 対象キーボードを含む出荷済み注文を探す
 
@@ -44,15 +44,15 @@ pnpm demo:recall
 
 出荷済み注文から `customerOrders` を逆方向にpivotします。同じ顧客が重複排除され、31注文が10顧客にまとまります。
 
-同じ商品から `productRecallTickets` を辿ると既存チケットが3件あり、そこから `customerRecallTickets` を逆方向にpivotすると、前日に電話した3顧客が得られます。この顧客集合を、対象の10顧客から差し引きます。
+`RecallTicket` をsearchし、`productId === 'ITM-101'` でfilterすると既存チケットが3件あります。そこから `customerRecallTickets` を逆方向にpivotすると、前日に電話した3顧客が得られます。この顧客集合を、対象の10顧客から差し引きます。
 
 ```text
 出荷済み31注文 → pivot → 対象10顧客
-商品 ITM-101 → チケット → pivot → 既存チケットがある3顧客
+RecallTicket → productIdでfilter → pivot → 既存チケットがある3顧客
 対象10顧客 − 既存チケットがある3顧客 → 起票する7顧客
 ```
 
-`subtract` の両側はCustomer集合です。商品から既存チケットを辿るため、別商品のチケットがあるだけの顧客は除外されません。
+`subtract` の両側はCustomer集合です。チケットを `productId` で絞るため、別商品のチケットがあるだけの顧客は除外されません。
 
 ## 3. 選んだ顧客のチケットをサポートシステムに作る
 
@@ -66,7 +66,7 @@ Actionは実行時点のインデックス済みデータで再検査します�
 | 同じ顧客・商品のチケットがまだない | `RECALL_TICKET_ALREADY_EXISTS` |
 | この顧客に、この商品を含む出荷済み注文がある | `NO_SHIPPED_ORDER` |
 
-Actionは `writeback: true` を宣言し、チケット作成と2つのリンクをサポート用アダプタに渡します。アダプタは1回のSQL `INSERT` で、顧客・商品への参照を持つチケットとして3つの編集を保存します。その後、ランタイムがローカルのオブジェクト・リンク・監査記録をコミットします。7回の呼び出しはそれぞれ独立したトランザクションで、成功するたびに1件のチケットが作られます。
+Actionは `writeback: true` を宣言し、`productId` を含むチケット作成と顧客リンクをサポート用アダプタに渡します。アダプタは1回のSQL `INSERT` で、顧客・商品への参照を持つチケットとして2つの編集を保存します。その後、ランタイムがローカルのオブジェクト・リンク・監査記録をコミットします。7回の呼び出しはそれぞれ独立したトランザクションで、成功するたびに1件のチケットが作られます。
 
 サポート側のテーブルにも `(customer_id, product_id)` の一意制約があります。インデックス後にソースで同じチケットが作られていた場合、INSERTが失敗し、ローカルにチケットを作らず `WRITEBACK_FAILED` を返します。注文の適合条件はインデックス済みのERPデータで確認し、3システム全体を1つのトランザクションにはしません。
 
@@ -74,7 +74,7 @@ Actionは `writeback: true` を宣言し、チケット作成と2つのリンク
 
 前日からチケットがある顧客にもう1件作成しようとすると、Actionが `RECALL_TICKET_ALREADY_EXISTS` で拒否します。
 
-続いて、3つのソースからスナップショットを読み直します。商品から10件のチケット、その顧客へ辿り、対象顧客との差集合を取ります。結果が空なら、対象10顧客すべてにチケットがあると確認できます。
+続いて、3つのソースからスナップショットを読み直します。チケットを `productId` で絞ってITM-101の10件を取得し、顧客へpivotして対象顧客との差集合を取ります。結果が空なら、対象10顧客すべてにチケットがあると確認できます。
 
 | 結果 | 件数 |
 | --- | --- |
@@ -95,4 +95,4 @@ Actionは `writeback: true` を宣言し、チケット作成と2つのリンク
 claude --strict-mcp-config --mcp-config examples/recall/.mcp.json
 ```
 
-同じモデルから `get_product`・`traverse_order_products`・`pivot_customer_orders`・`subtract_customer`・`create_recall_ticket` などのツールを公開します。MCPクライアントは取得した注文を自身のコードでfilterし、選択したIDを次のツールへ渡します。人もエージェントも同じActionを実行します。この例は単一の書き込み元と、判断に必要な全データが見えることを前提とします。詳細は[ランタイムの契約](../../docs/IMPLEMENTATION.ja.md)を参照してください。
+同じモデルから `get_product`・`traverse_order_products`・`pivot_customer_orders`・`search_recall_ticket`・`pivot_customer_recall_tickets`・`subtract_customer`・`create_recall_ticket` などのツールを公開します。MCPクライアントは自身のコードで注文を出荷状態、チケットを `productId` でfilterし、選択したIDを次のツールへ渡します。人もエージェントも同じActionを実行します。この例は単一の書き込み元と、判断に必要な全データが見えることを前提とします。詳細は[ランタイムの契約](../../docs/IMPLEMENTATION.ja.md)を参照してください。

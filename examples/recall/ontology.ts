@@ -23,7 +23,8 @@ const objects = {
   RecallTicket: defineObject({
     primaryKey: 'id', source: 'support.tickets',
     properties: {
-      id: z.string(), note: z.string(), recordedOn: z.string() /* YYYY-MM-DD */, author: z.string(),
+      id: z.string(), productId: z.string(), note: z.string(),
+      recordedOn: z.string() /* YYYY-MM-DD */, author: z.string(),
     },
   }),
 }
@@ -41,9 +42,6 @@ const schema = defineOntology({
     }),
     customerRecallTickets: defineLink({
       from: 'Customer', to: 'RecallTicket', kind: 'one-to-many', via: 'support.tickets.customer_id',
-    }),
-    productRecallTickets: defineLink({
-      from: 'Product', to: 'RecallTicket', kind: 'one-to-many', via: 'support.tickets.product_id',
     }),
   },
   actions: {},
@@ -74,10 +72,9 @@ export function createRecallOntology(read: () => RecallRead) {
             if (!product) return reject('UNKNOWN_PRODUCT', `product ${params.productId} does not exist`)
           },
           ({ object, params, actor }) => {
-            const product = read().get('Product', params.productId, { actor })!
             const customerTickets = read().traverse(object, 'customerRecallTickets', { actor })
-            const productTickets = read().traverse(product, 'productRecallTickets', { actor })
-            if (read().intersect(customerTickets, productTickets).objects.length > 0) {
+            const matching = read().filter(customerTickets, (ticket) => ticket.properties.productId === params.productId)
+            if (matching.objects.length > 0) {
               return reject('RECALL_TICKET_ALREADY_EXISTS', `customer ${object.pk} already has a recall ticket for ${params.productId}`)
             }
           },
@@ -93,10 +90,10 @@ export function createRecallOntology(read: () => RecallRead) {
         ],
         effects: ({ object, params }) => [
           create('RecallTicket', params.ticketId, {
-            id: params.ticketId, note: params.note, recordedOn: params.recordedOn, author: params.author,
+            id: params.ticketId, productId: params.productId,
+            note: params.note, recordedOn: params.recordedOn, author: params.author,
           }),
           link('customerRecallTickets', object.pk, params.ticketId),
-          link('productRecallTickets', params.productId, params.ticketId),
         ],
         writeback: true,
       }),

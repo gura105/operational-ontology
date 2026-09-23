@@ -23,7 +23,7 @@ function discover(rt: Runtime<Recall>) {
   const orders = rt.traverse(product, 'orderProducts', { actor })
   const shipped = rt.filter(orders, (order) => order.properties.status === 'shipped')
   const customers = rt.pivot(shipped, 'customerOrders', { actor })
-  const tickets = rt.traverse(product, 'productRecallTickets', { actor })
+  const tickets = rt.filter(rt.search('RecallTicket', { actor }), (ticket) => ticket.properties.productId === product.pk)
   const covered = rt.pivot(tickets, 'customerRecallTickets', { actor })
   return { product, orders, shipped, customers, tickets, covered, selected: rt.subtract(customers, covered) }
 }
@@ -60,7 +60,7 @@ test('seven customer-only requests create support tickets, reject a duplicate an
     })
     const ticket = rt.get('RecallTicket', params.ticketId, { actor })!
     assert.deepEqual(ids(rt.traverse(ticket, 'customerRecallTickets', { actor }).objects), [customer.pk])
-    assert.deepEqual(ids(rt.traverse(ticket, 'productRecallTickets', { actor }).objects), [params.productId])
+    assert.equal(ticket.properties.productId, params.productId)
   }
   const duplicate = rt.execute('createRecallTicket', ticketParams(covered.objects[0].pk, 'RT-DUPLICATE'), { actor })
   assert.equal(duplicate.ok, false)
@@ -130,7 +130,7 @@ test('a ticket for another product does not exclude the customer; source updates
   const ticket = rt.get('RecallTicket', params.ticketId, { actor })!
   assert.equal(ticket.properties.note, 'Support corrected this note')
   assert.deepEqual(ids(rt.traverse(ticket, 'customerRecallTickets', { actor }).objects), ['N-C04'])
-  assert.deepEqual(ids(rt.traverse(ticket, 'productRecallTickets', { actor }).objects), ['ITM-101'])
+  assert.equal(ticket.properties.productId, 'ITM-101')
   assert.equal(discover(rt).selected.objects.length, 6)
 })
 
@@ -148,13 +148,16 @@ test('the support system refuses a duplicate created after indexing without leav
   assert.equal(sources.support.prepare('SELECT * FROM tickets WHERE id = ?').get(params.ticketId), undefined)
   assert.equal(sources.support.prepare('SELECT * FROM tickets').all().length, 4)
   assert.equal(rt.auditLog()[0].error?.code, 'WRITEBACK_FAILED')
-  assert.equal(rt.auditLog()[0].edits?.length, 3)
+  assert.equal(rt.auditLog()[0].edits?.length, 2)
   rt.load(integrate(sources))
   assert.deepEqual(ids(rt.traverse(customer, 'customerRecallTickets', { actor }).objects), ['RT-UPSTREAM'])
 })
 
-test('MCP clients pivot, subtract and create a support ticket without supplying order IDs', async (t) => {
+test('MCP clients filter, pivot, subtract and create a support ticket without supplying order IDs', async (t) => {
   const { rt, sources } = setup(t)
+  sources.support.prepare('INSERT INTO tickets VALUES (?, ?, ?, ?, ?, ?)')
+    .run('RT-MONITOR', 'N-C04', 'ITM-100', 'Monitor exchange', '2026-09-09', 'cs-phone')
+  rt.load(integrate(sources))
   const server = buildMcpServer(rt, { agent: 'cs-agent' })
   const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair()
   const client = new Client({ name: 'recall-test', version: '0.0.0' })
@@ -173,14 +176,16 @@ test('MCP clients pivot, subtract and create a support ticket without supplying 
   const orders = await call<ObjectSet>('traverse_order_products', { source: product })
   const shipped = orders.objects.filter((order) => order.properties.status === 'shipped')
   const customers = await call<ObjectSet>('pivot_customer_orders', { source: { type: 'Order', pks: ids(shipped) } })
-  const tickets = await call<ObjectSet>('traverse_product_recall_tickets', { source: product })
+  const allTickets = await call<ObjectSet>('search_recall_ticket', {})
+  const tickets = allTickets.objects.filter((ticket) => ticket.properties.productId === product.pk)
   const covered = await call<ObjectSet>('pivot_customer_recall_tickets', {
-    source: { type: 'RecallTicket', pks: ids(tickets.objects) },
+    source: { type: 'RecallTicket', pks: ids(tickets) },
   })
   const selected = await call<ObjectSet>('subtract_customer', { left: ids(customers.objects), right: ids(covered.objects) })
   assert.equal(selected.objects.length, 7)
+  assert.ok(ids(selected.objects).includes('N-C04'))
   await call('create_recall_ticket', ticketParams(selected.objects[0].pk, 'RT-MCP'))
-  assert.equal(sources.support.prepare('SELECT * FROM tickets').all().length, 4)
+  assert.equal(sources.support.prepare('SELECT * FROM tickets').all().length, 5)
 
   const refused = await client.callTool({
     name: 'create_recall_ticket', arguments: ticketParams(covered.objects[0].pk, 'RT-MCP-REFUSED'),

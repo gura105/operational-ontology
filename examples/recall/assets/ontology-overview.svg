@@ -1,6 +1,6 @@
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1200 1230" role="img" aria-labelledby="title desc">
   <title id="title">Recall: find customers, create support tickets</title>
-  <desc id="desc">All four object types and four declared links in the recall model. Customer links to Order and RecallTicket; Order links to Product; Product links to RecallTicket. All objects and links are source-backed. Filter, pivot and subtract select seven customers without a ticket. createRecallTicket rechecks eligibility and duplicates, then inserts a ticket with customer and product references into support. Re-indexing confirms ten customers have tickets. Properties are selected, not exhaustive.</desc>
+  <desc id="desc">All four object types and three declared links in the recall model. Customer links to Order and RecallTicket; Order links to Product. All objects and links are source-backed. RecallTicket stores productId as a property. Filter tickets by productId, pivot to customers and subtract them from affected customers to select seven customers without a ticket. createRecallTicket rechecks eligibility and duplicates, then inserts a ticket with customer and product references into support. Re-indexing confirms ten customers have tickets. Properties are selected, not exhaustive.</desc>
   <!-- Edit this SVG, then export its PNG at 2x with:
        rsvg-convert -w 2400 -o ontology-overview.png ontology-overview.svg -->
   <defs>
@@ -9,7 +9,7 @@
   </defs>
   <rect width="1200" height="1230" fill="#FFFFFF"/>
   <text x="54" y="65" font-size="29" font-weight="760" fill="#20242A">Recall: find customers, create support tickets</text>
-  <text x="54" y="101" font-size="19" font-weight="500" fill="#747B84">4 object types · 4 link types · 1 Action · ERP + support</text>
+  <text x="54" y="101" font-size="19" font-weight="500" fill="#747B84">4 object types · 3 link types · 1 Action · ERP + support</text>
 
   <rect x="54" y="140" width="1092" height="630" rx="30" fill="#FFFFFF" stroke="#20242A" stroke-width="3"/>
   <text x="84" y="183" font-size="17" font-weight="760" fill="#20242A" letter-spacing="1.2">OBJECT TYPES &amp; LINKS</text>
@@ -33,11 +33,6 @@
     <text x="244" y="456" text-anchor="middle" font-size="17" font-weight="650" fill="#5B626B">customerRecallTickets</text>
     <text x="244" y="482" text-anchor="middle" font-size="15" font-weight="500" fill="#747B84">1:N</text>
   </g>
-  <g data-link="productRecallTickets" data-from="Product" data-to="RecallTicket" data-kind="one-to-many">
-    <path d="M 802 626 H 394" fill="none" stroke="#5B626B" stroke-width="2.8" marker-end="url(#arrow-gray)"/>
-    <text x="598" y="608" text-anchor="middle" font-size="17" font-weight="650" fill="#5B626B">productRecallTickets</text>
-    <text x="598" y="654" text-anchor="middle" font-size="15" font-weight="500" fill="#747B84">1:N</text>
-  </g>
 
   <g data-object="Customer" data-properties="name region">
     <rect x="94" y="242" width="300" height="136" rx="21" fill="#F8F9FA" stroke="#343A42" stroke-width="2.5"/>
@@ -58,11 +53,12 @@
     <text x="824" y="628" font-size="17" font-weight="500" fill="#5B626B">name · stock</text>
     <text x="824" y="669" font-size="16" font-weight="600" fill="#747B84">south.ITEM_MASTER</text>
   </g>
-  <g data-object="RecallTicket" data-properties="note recordedOn author">
+  <g data-object="RecallTicket" data-properties="productId note recordedOn author">
     <rect x="94" y="558" width="300" height="136" rx="21" fill="#F8F9FA" stroke="#343A42" stroke-width="2.5"/>
     <text x="116" y="596" font-size="23" font-weight="730" fill="#20242A">RecallTicket</text>
-    <text x="116" y="628" font-size="17" font-weight="500" fill="#5B626B">note · recordedOn · author</text>
-    <text x="116" y="669" font-size="16" font-weight="600" fill="#747B84">support.tickets</text>
+    <text x="116" y="628" font-size="17" font-weight="500" fill="#5B626B">productId · note</text>
+    <text x="116" y="652" font-size="17" font-weight="500" fill="#5B626B">recordedOn · author</text>
+    <text x="116" y="677" font-size="16" font-weight="600" fill="#747B84">support.tickets</text>
   </g>
 
   <path d="M 84 721 H 120" stroke="#5B626B" stroke-width="3" marker-end="url(#arrow-gray)"/>
@@ -81,7 +77,7 @@
   <g data-exploration="customers-without-tickets">
     <text x="80" y="916" font-size="23" font-weight="730" fill="#20242A">Filter → Pivot → Subtract</text>
     <text x="80" y="955" font-size="18" font-weight="500" fill="#5B626B">48 orders → 31 shipped → 10 customers</text>
-    <text x="80" y="991" font-size="18" font-weight="500" fill="#5B626B">Product → existing tickets → 3 customers</text>
+    <text x="80" y="991" font-size="18" font-weight="500" fill="#5B626B">Filter tickets by productId → pivot → 3 customers</text>
     <text x="80" y="1040" font-size="25" font-weight="730" fill="#20242A">10 − 3 = 7 customers to act on</text>
     <text x="80" y="1083" font-size="18" font-weight="500" fill="#5B626B">Subtract customers with a ticket for this product.</text>
     <text x="80" y="1122" font-size="17" font-weight="550" fill="#5B626B">One ticket per customer, across repeat orders.</text>

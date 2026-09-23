@@ -27,8 +27,9 @@ try {
   trace('Pivot customerOrders (reverse): Order → Customer', { shipped }, customers)
   log(`${shipped.objects.length} orders belong to ${customers.objects.length} customers. Repeat purchases collapse to one customer.`)
 
-  const existingTickets = rt.traverse(product, 'productRecallTickets', { actor })
-  trace('Traverse productRecallTickets: Product → RecallTicket', { product }, existingTickets)
+  const allTickets = rt.search('RecallTicket', { actor })
+  const existingTickets = rt.filter(allTickets, (ticket) => ticket.properties.productId === product.pk)
+  trace(`Filter: RecallTicket.productId = ${product.pk}`, { allTickets }, existingTickets)
   log('These three tickets were recorded in the support system after yesterday\'s phone calls.')
   const coveredCustomers = rt.pivot(existingTickets, 'customerRecallTickets', { actor })
   trace('Pivot customerRecallTickets (reverse): RecallTicket → Customer', { existingTickets }, coveredCustomers)
@@ -69,8 +70,9 @@ try {
   const refreshedCustomers = rt.pivot(
     rt.filter(refreshedOrders, (order) => order.properties.status === 'shipped'), 'customerOrders', { actor },
   )
-  const tickets = rt.traverse(refreshedProduct, 'productRecallTickets', { actor })
-  trace('Re-index, then traverse Product → RecallTicket', { product: refreshedProduct }, tickets)
+  const refreshedTickets = rt.search('RecallTicket', { actor })
+  const tickets = rt.filter(refreshedTickets, (ticket) => ticket.properties.productId === refreshedProduct.pk)
+  trace(`Re-index, then filter: RecallTicket.productId = ${refreshedProduct.pk}`, { refreshedTickets }, tickets)
   const ticketedCustomers = rt.pivot(tickets, 'customerRecallTickets', { actor })
   trace('Pivot RecallTicket → Customer', { tickets }, ticketedCustomers)
   const missing = rt.subtract(refreshedCustomers, ticketedCustomers)
