@@ -133,14 +133,18 @@ const ontology = defineOntology({
 
 产品召回、设备异常、患者入院请求、交易告警。业务团队需要汇集信息，判断要对谁或什么采取行动、依据是什么，并随着情况变化反复决策和执行。我们将这一工作流程称为**数据驱动的业务运营**。
 
-下面四个示例使用 Operational Ontology 确定操作对象和支持证据，再通过 Action 复核条件，记录任务、临时分配或调查案件。
+订单演示（`pnpm demo`）展示 Operational Ontology 的基本结构：用共享模型处理多个系统的数据，并结合业务规则、写回、数据归属和审计。
 
-| 示例 | 业务问题与应对 | 运行 |
+建议接着阅读召回示例。它在同一个订单模型上加入客服系统，从已发货订单中找出相关客户，与现有工单比对后创建缺少的工单。ERP 和客服系统各自保留对数据的权威性，示例将探索与业务操作串成完整流程。
+
+工厂、医院和金融示例进一步展示影响范围追踪、候选资源评估与分配，以及通过集合和聚合开展调查。
+
+| 示例 | 展示的业务流程 | 运行 |
 | --- | --- | --- |
-| [召回（英文）](../examples/recall/README.md) | 哪些有缺陷产品已发货订单的客户还没有更换联系工单？比对 ERP 订单与客服工单，在客服系统中创建缺少的工单。 | `pnpm demo:recall` |
-| [工厂（英文）](../examples/factory/README.md) | 哪些客户收到了可能受影响批次的货物？创建客户联系或复检任务。 | `pnpm demo:factory` |
-| [医院（英文）](../examples/hospital/README.md) | 哪张病床和哪位护士符合患者要求？记录临时分配。 | `pnpm demo:hospital` |
-| [金融（英文）](../examples/finance/README.md) | 所选账户有哪些共同收款方？记录调查案件及作为证据的转账。 | `pnpm demo:finance` |
+| [召回（英文）](../examples/recall/README.md) | 跨越 ERP 和客服系统，从找出受影响客户到创建更换联系工单。 | `pnpm demo:recall` |
+| [工厂（英文）](../examples/factory/README.md) | 沿生产和出货关系确定影响范围，记录应对任务及其证据。 | `pnpm demo:factory` |
+| [医院（英文）](../examples/hospital/README.md) | 评估病床和护士候选，复核选定组合的条件，记录临时分配。 | `pnpm demo:hospital` |
+| [金融（英文）](../examples/finance/README.md) | 调查账户间的共同收款方及相关转账，记录调查案件及其证据。 | `pnpm demo:finance` |
 
 这些示例使用虚构数据，将集合探索与模型中的领域规则结合起来。找到候选对象或共同关系，本身并不意味着决策已经确定，也不会改变业务状态。
 
