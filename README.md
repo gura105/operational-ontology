@@ -131,15 +131,20 @@ Calling `execute('cancelOrder', …)` loads the target and checks the rule. For 
 
 ## Use cases: data-driven operations
 
-An equipment anomaly, a patient admission request, a transaction alert. Operational teams respond by bringing information together, deciding who or what to act on and on what evidence, and repeating those decisions and actions as conditions change. We call this workflow **data-driven operations**.
+A product recall, an equipment anomaly, a patient admission request, a transaction alert. Operational teams respond by bringing information together, deciding who or what to act on and on what evidence, and repeating those decisions and actions as conditions change. We call this workflow **data-driven operations**.
 
-The three examples below use Operational Ontology to identify the objects to act on and the supporting evidence, then use an Action to recheck conditions and record a task, provisional allocation, or investigation case.
+The orders demo (`pnpm demo`) shows the basic structure of Operational Ontology: a shared model for data from multiple systems, combining business rules, write-back, ownership and auditing.
 
-| Example | Business question and response | Run |
+Read the recall example next. It adds a customer-support system to the same orders model, finds customers with shipped orders, compares them with existing tickets and creates the missing tickets. Orders are managed in ERP and tickets in support, while the example connects exploration to business actions in one workflow.
+
+The factory, hospital and finance examples extend the applications to tracing impact, evaluating and allocating resources, and investigating through sets and aggregations.
+
+| Example | Workflow demonstrated | Run |
 | --- | --- | --- |
-| [Factory](./examples/factory/README.md) | Which customers received potentially affected lots? Create a contact/reinspection task. | `pnpm demo:factory` |
-| [Hospital](./examples/hospital/README.md) | Which bed and nurse meet a patient's requirements? Record a provisional allocation. | `pnpm demo:hospital` |
-| [Finance](./examples/finance/README.md) | Which recipients are shared by selected accounts? Record a case and its evidence transfers. | `pnpm demo:finance` |
+| [Recall](./examples/recall/README.md) | Work across ERP and support, from finding affected customers to creating exchange-contact tickets. | `pnpm demo:recall` |
+| [Factory](./examples/factory/README.md) | Trace manufacturing and shipment relationships to identify impact, then record response tasks with evidence. | `pnpm demo:factory` |
+| [Hospital](./examples/hospital/README.md) | Evaluate bed and nurse candidates, recheck the selected combination and record a provisional allocation. | `pnpm demo:hospital` |
+| [Finance](./examples/finance/README.md) | Investigate recipients shared by accounts and their transfers, then record a case with evidence. | `pnpm demo:finance` |
 
 These synthetic examples combine set exploration with domain rules in the model. Finding a candidate or common relationship does not itself establish a decision or change the business state.
 
@@ -190,7 +195,7 @@ An implementation must declare choices that callers can observe. This one makes 
 
 The runtime demonstrates the pattern with synchronous action execution and SQLite. It includes no UI builder, pipeline framework, scalable indexing service, or general authorization system. The write gate is an API contract within the caller's process. These boundaries keep the implementation readable.
 
-Creation is limited to ontology-owned objects; deletes, link properties, and composite keys are unsupported. The [implementation notes](./docs/IMPLEMENTATION.md#current-limits) document the remaining limits and API details. Published versions are in the [release notes](https://github.com/gura105/operational-ontology/releases).
+Actions can create ontology-owned objects or source-backed records through write-back, using IDs specified before execution. Deletes, link properties, and composite keys are unsupported. The [implementation notes](./docs/IMPLEMENTATION.md#current-limits) document the remaining limits and API details. Published versions are in the [release notes](https://github.com/gura105/operational-ontology/releases).
 
 ## FAQ
 

@@ -131,15 +131,20 @@ const ontology = defineOntology({
 
 ## 应用示例：数据驱动的业务运营
 
-设备异常、患者入院请求、交易告警。业务团队需要汇集信息，判断要对谁或什么采取行动、依据是什么，并随着情况变化反复决策和执行。我们将这一工作流程称为**数据驱动的业务运营**。
+产品召回、设备异常、患者入院请求、交易告警。业务团队需要汇集信息，判断要对谁或什么采取行动、依据是什么，并随着情况变化反复决策和执行。我们将这一工作流程称为**数据驱动的业务运营**。
 
-下面三个示例使用 Operational Ontology 确定操作对象和支持证据，再通过 Action 复核条件，记录任务、临时分配或调查案件。
+订单演示（`pnpm demo`）展示 Operational Ontology 的基本结构：用共享模型处理多个系统的数据，并结合业务规则、写回、数据归属和审计。
 
-| 示例 | 业务问题与应对 | 运行 |
+建议接着阅读召回示例。它在同一个订单模型上加入客服系统，从已发货订单中找出相关客户，与现有工单比对后创建缺少的工单。订单由 ERP 管理，工单由客服系统管理，示例将探索与业务操作串成完整流程。
+
+工厂、医院和金融示例进一步展示影响范围追踪、候选资源评估与分配，以及通过集合和聚合开展调查。
+
+| 示例 | 展示的业务流程 | 运行 |
 | --- | --- | --- |
-| [工厂（英文）](../examples/factory/README.md) | 哪些客户收到了可能受影响批次的货物？创建客户联系或复检任务。 | `pnpm demo:factory` |
-| [医院（英文）](../examples/hospital/README.md) | 哪张病床和哪位护士符合患者要求？记录临时分配。 | `pnpm demo:hospital` |
-| [金融（英文）](../examples/finance/README.md) | 所选账户有哪些共同收款方？记录调查案件及作为证据的转账。 | `pnpm demo:finance` |
+| [召回（英文）](../examples/recall/README.md) | 跨越 ERP 和客服系统，从找出受影响客户到创建更换联系工单。 | `pnpm demo:recall` |
+| [工厂（英文）](../examples/factory/README.md) | 沿生产和出货关系确定影响范围，记录应对任务及其证据。 | `pnpm demo:factory` |
+| [医院（英文）](../examples/hospital/README.md) | 评估病床和护士候选，复核选定组合的条件，记录临时分配。 | `pnpm demo:hospital` |
+| [金融（英文）](../examples/finance/README.md) | 调查账户间的共同收款方及相关转账，记录调查案件及其证据。 | `pnpm demo:finance` |
 
 这些示例使用虚构数据，将集合探索与模型中的领域规则结合起来。找到候选对象或共同关系，本身并不意味着决策已经确定，也不会改变业务状态。
 
@@ -190,7 +195,7 @@ https://github.com/user-attachments/assets/28327062-e09f-4103-943e-434a0e55b327
 
 运行时通过同步动作执行和 SQLite 展示该模式。它不包含 UI 构建器、流水线框架、可扩展的索引服务或通用授权系统。写入入口是调用方进程内的 API 契约。这样的范围使实现保持易读。
 
-仅支持创建本体拥有的对象；不支持删除、链接属性和复合主键。[实现说明（英文）](./IMPLEMENTATION.md#current-limits)记录了其余限制和 API 细节。已发布版本见 [release notes（英文）](https://github.com/gura105/operational-ontology/releases)。
+Action 使用执行前指定的 ID，可以创建本体拥有的对象，也可以通过写回创建源系统拥有的记录。不支持删除、链接属性和复合主键。[实现说明（英文）](./IMPLEMENTATION.md#current-limits)记录了其余限制和 API 细节。已发布版本见 [release notes（英文）](https://github.com/gura105/operational-ontology/releases)。
 
 ## 常见问题
 
