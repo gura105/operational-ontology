@@ -20,8 +20,8 @@ const objects = {
     primaryKey: 'id', source: 'south.ITEM_MASTER',
     properties: { id: z.string(), name: z.string(), stock: z.number() },
   }),
-  RecallTask: defineObject({
-    primaryKey: 'id', owned: true,
+  RecallTicket: defineObject({
+    primaryKey: 'id', source: 'support.tickets',
     properties: {
       id: z.string(), note: z.string(), recordedOn: z.string() /* YYYY-MM-DD */, author: z.string(),
     },
@@ -39,14 +39,17 @@ const schema = defineOntology({
       from: 'Order', to: 'Product', kind: 'many-to-many',
       via: 'join tables (north.tbl_order_line ∪ south.ORDER_LINE)',
     }),
-    customerRecallTasks: defineLink({ from: 'Customer', to: 'RecallTask', kind: 'one-to-many', owned: true }),
-    productRecallTasks: defineLink({ from: 'Product', to: 'RecallTask', kind: 'one-to-many', owned: true }),
-    recallTaskOrders: defineLink({ from: 'RecallTask', to: 'Order', kind: 'many-to-many', owned: true }),
+    customerRecallTickets: defineLink({
+      from: 'Customer', to: 'RecallTicket', kind: 'one-to-many', via: 'support.tickets.customer_id',
+    }),
+    productRecallTickets: defineLink({
+      from: 'Product', to: 'RecallTicket', kind: 'one-to-many', via: 'support.tickets.product_id',
+    }),
   },
   actions: {},
 })
 
-type RecallRead = Pick<Runtime<typeof schema>, 'get' | 'traverse' | 'pivot' | 'filter' | 'intersect'>
+type RecallRead = Pick<Runtime<typeof schema>, 'get' | 'traverse' | 'filter' | 'intersect'>
 
 /**
  * Rules need current related objects. Inject only the read methods here;
@@ -57,12 +60,12 @@ export function createRecallOntology(read: () => RecallRead) {
   return defineOntology({
     ...schema,
     actions: {
-      createRecallTask: defineAction(objects, {
-        description: 'Record an exchange-contact task for a customer with shipped orders containing the recalled product. Refuses a second task for the same customer and product. Does not send a message or record contact completion.',
+      createRecallTicket: defineAction(objects, {
+        description: 'Create an exchange-contact ticket in the support system for a customer with shipped orders containing the recalled product. Refuses a second ticket for the same customer and product. Does not send a message or record contact completion.',
         object: 'Customer', targetParam: 'customerId',
         params: {
-          taskId: z.string().min(1), customerId: z.string(), productId: z.string(),
-          orderIds: z.array(z.string()).min(1), note: z.string().min(1),
+          ticketId: z.string().min(1), customerId: z.string(), productId: z.string(),
+          note: z.string().min(1),
           recordedOn: z.iso.date(), author: z.string().min(1),
         },
         preconditions: [
@@ -72,10 +75,10 @@ export function createRecallOntology(read: () => RecallRead) {
           },
           ({ object, params, actor }) => {
             const product = read().get('Product', params.productId, { actor })!
-            const customerTasks = read().traverse(object, 'customerRecallTasks', { actor })
-            const productTasks = read().traverse(product, 'productRecallTasks', { actor })
-            if (read().intersect(customerTasks, productTasks).objects.length > 0) {
-              return reject('RECALL_TASK_ALREADY_EXISTS', `customer ${object.pk} already has a recall task for ${params.productId}`)
+            const customerTickets = read().traverse(object, 'customerRecallTickets', { actor })
+            const productTickets = read().traverse(product, 'productRecallTickets', { actor })
+            if (read().intersect(customerTickets, productTickets).objects.length > 0) {
+              return reject('RECALL_TICKET_ALREADY_EXISTS', `customer ${object.pk} already has a recall ticket for ${params.productId}`)
             }
           },
           ({ object, params, actor }) => {
@@ -83,21 +86,19 @@ export function createRecallOntology(read: () => RecallRead) {
             const customerOrders = read().traverse(object, 'customerOrders', { actor })
             const shipped = read().filter(customerOrders, (order) => order.properties.status === 'shipped')
             const productOrders = read().traverse(product, 'orderProducts', { actor })
-            const valid = read().intersect(shipped, productOrders)
-            if (new Set(params.orderIds).size !== params.orderIds.length ||
-                params.orderIds.some((id) => !valid.objects.some((order) => order.pk === id))) {
-              return reject('INVALID_EVIDENCE', 'Choose distinct shipped orders of this customer that contain the recalled product')
+            if (read().intersect(shipped, productOrders).objects.length === 0) {
+              return reject('NO_SHIPPED_ORDER', `customer ${object.pk} has no shipped order containing ${params.productId}`)
             }
           },
         ],
         effects: ({ object, params }) => [
-          create('RecallTask', params.taskId, {
-            id: params.taskId, note: params.note, recordedOn: params.recordedOn, author: params.author,
+          create('RecallTicket', params.ticketId, {
+            id: params.ticketId, note: params.note, recordedOn: params.recordedOn, author: params.author,
           }),
-          link('customerRecallTasks', object.pk, params.taskId),
-          link('productRecallTasks', params.productId, params.taskId),
-          ...params.orderIds.map((orderId) => link('recallTaskOrders', params.taskId, orderId)),
+          link('customerRecallTickets', object.pk, params.ticketId),
+          link('productRecallTickets', params.productId, params.ticketId),
         ],
+        writeback: true,
       }),
     },
   })

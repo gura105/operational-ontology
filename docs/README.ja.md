@@ -138,7 +138,7 @@ const ontology = defineOntology({
 
 | 例 | 業務上の問いと対応 | 実行 |
 | --- | --- | --- |
-| [リコール](../examples/recall/README.ja.md) | 不良品を含む出荷済み注文の顧客は誰か。交換連絡のタスクを作り、重複作成は拒否する。 | `pnpm demo:recall` |
+| [リコール](../examples/recall/README.ja.md) | 対象商品の出荷済み注文の顧客で、交換連絡チケットがまだないのは誰か。ERPの注文とサポートの既存チケットを照合し、不足分をサポート側に起票する。 | `pnpm demo:recall` |
 | [工場](../examples/factory/README.ja.md) | 影響が疑われるロットの出荷先はどこか。顧客連絡・再検査の検討タスクを作る。 | `pnpm demo:factory` |
 | [病院](../examples/hospital/README.ja.md) | 患者の要件を満たす病床と看護師はどれか。仮割当を記録する。 | `pnpm demo:hospital` |
 | [金融](../examples/finance/README.ja.md) | 対象口座に共通する受取先はどこか。根拠取引とともに調査ケースを記録する。 | `pnpm demo:finance` |

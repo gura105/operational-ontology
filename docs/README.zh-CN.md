@@ -137,7 +137,7 @@ const ontology = defineOntology({
 
 | 示例 | 业务问题与应对 | 运行 |
 | --- | --- | --- |
-| [召回（英文）](../examples/recall/README.md) | 哪些客户有包含缺陷产品的已发货订单？创建更换联系任务，并拒绝重复创建任务。 | `pnpm demo:recall` |
+| [召回（英文）](../examples/recall/README.md) | 哪些有缺陷产品已发货订单的客户还没有更换联系工单？比对 ERP 订单与客服工单，在客服系统中创建缺少的工单。 | `pnpm demo:recall` |
 | [工厂（英文）](../examples/factory/README.md) | 哪些客户收到了可能受影响批次的货物？创建客户联系或复检任务。 | `pnpm demo:factory` |
 | [医院（英文）](../examples/hospital/README.md) | 哪张病床和哪位护士符合患者要求？记录临时分配。 | `pnpm demo:hospital` |
 | [金融（英文）](../examples/finance/README.md) | 所选账户有哪些共同收款方？记录调查案件及作为证据的转账。 | `pnpm demo:finance` |

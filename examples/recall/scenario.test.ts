@@ -3,7 +3,8 @@ import assert from 'node:assert/strict'
 import { Client } from '@modelcontextprotocol/sdk/client/index.js'
 import { InMemoryTransport } from '@modelcontextprotocol/sdk/inMemory.js'
 import { buildMcpServer } from '../../src/mcp.js'
-import type { AuditEntry, ObjectInstance, ObjectSet } from '../../src/core.js'
+import type { AuditEntry, ObjectInstance, ObjectSet, Runtime } from '../../src/core.js'
+import type { Recall } from './ontology.js'
 import {
   KEYBOARD_CANCELLED, KEYBOARD_CUSTOMERS, KEYBOARD_ORDERS, KEYBOARD_PENDING, KEYBOARD_SHIPPED, TOTAL_ORDERS,
 } from './fixtures.js'
@@ -17,175 +18,144 @@ function setup(t: TestContext) {
   t.after(() => app.close())
   return app
 }
-
-test('recall starts with yesterday\'s calls and finds the exact shipped keyboard population', (t) => {
-  const { rt } = setup(t)
-  assert.equal(rt.search('Order', { actor }).objects.length, TOTAL_ORDERS)
-  assert.equal(rt.search('RecallTask', { actor }).objects.length, 3)
-  assert.deepEqual(rt.auditLog().map((entry) => [entry.status, entry.actor]), [
-    ['applied', 'user:cs-phone'],
-    ['applied', 'user:cs-phone'],
-    ['applied', 'user:cs-phone'],
-  ])
-
+function discover(rt: Runtime<Recall>) {
   const product = rt.get('Product', 'ITM-101', { actor })!
-  const keyboardOrders = rt.traverse(product, 'orderProducts', { actor })
-  assert.equal(keyboardOrders.objects.length, KEYBOARD_ORDERS)
-  const shipped = rt.filter(keyboardOrders, (order) => order.properties.status === 'shipped')
-  const pending = rt.filter(keyboardOrders, (order) => order.properties.status === 'pending')
-  const cancelled = rt.filter(keyboardOrders, (order) => order.properties.status === 'cancelled')
-  assert.equal(shipped.objects.length, KEYBOARD_SHIPPED)
-  assert.equal(pending.objects.length, KEYBOARD_PENDING)
-  assert.equal(cancelled.objects.length, KEYBOARD_CANCELLED)
-  assert.equal(rt.pivot(shipped, 'customerOrders', { actor }).objects.length, KEYBOARD_CUSTOMERS)
-})
-
-test('recall records one task per affected customer and preserves each task\'s order evidence', (t) => {
-  const { rt, seededCustomerIds } = setup(t)
-  const product = rt.get('Product', 'ITM-101', { actor })!
-  const keyboardOrders = rt.traverse(product, 'orderProducts', { actor })
-  const shipped = rt.filter(keyboardOrders, (order) => order.properties.status === 'shipped')
+  const orders = rt.traverse(product, 'orderProducts', { actor })
+  const shipped = rt.filter(orders, (order) => order.properties.status === 'shipped')
   const customers = rt.pivot(shipped, 'customerOrders', { actor })
-  const applied: string[] = []
-  const rejected: string[] = []
-  for (const customer of customers.objects) {
-    const evidence = rt.intersect(
-      rt.filter(rt.traverse(customer, 'customerOrders', { actor }), (order) => order.properties.status === 'shipped'),
-      keyboardOrders,
-    )
-    const result = rt.execute('createRecallTask', {
-      taskId: `RT-${customer.pk}`, customerId: customer.pk, productId: product.pk,
-      orderIds: ids(evidence.objects), note: 'Arrange keyboard exchange',
-      recordedOn: '2026-09-10', author: 'cs-recall',
-    }, { actor })
-    if (result.ok) applied.push(customer.pk)
-    else {
-      assert.equal(result.error.code, 'RECALL_TASK_ALREADY_EXISTS')
-      rejected.push(customer.pk)
-    }
-  }
-  assert.equal(applied.length, 7)
-  assert.equal(rejected.length, 3)
-  assert.deepEqual(rejected, seededCustomerIds)
-
-  for (const customer of customers.objects) {
-    assert.ok(rt.traverse(customer, 'customerRecallTasks', { actor }).objects.length >= 1)
-  }
-  for (const customerId of applied) {
-    const customer = rt.get('Customer', customerId, { actor })!
-    const expected = rt.intersect(
-      rt.filter(rt.traverse(customer, 'customerOrders', { actor }), (order) => order.properties.status === 'shipped'),
-      keyboardOrders,
-    )
-    const task = rt.get('RecallTask', `RT-${customerId}`, { actor })!
-    assert.deepEqual(ids(rt.traverse(task, 'recallTaskOrders', { actor }).objects), ids(expected.objects))
-  }
-  assert.equal(rt.traverse(product, 'productRecallTasks', { actor }).objects.length, KEYBOARD_CUSTOMERS)
-  assert.equal(rt.auditLog().length, 13)
-  assert.equal(rt.auditLog({ status: 'applied' }).length, 10)
-  assert.equal(rt.auditLog({ status: 'rejected' }).length, 3)
+  const tickets = rt.traverse(product, 'productRecallTickets', { actor })
+  const covered = rt.pivot(tickets, 'customerRecallTickets', { actor })
+  return { product, orders, shipped, customers, tickets, covered, selected: rt.subtract(customers, covered) }
+}
+const ticketParams = (customerId: string, ticketId = `RT-ITM-101-${customerId}`) => ({
+  ticketId, customerId, productId: 'ITM-101', note: 'Arrange keyboard exchange',
+  recordedOn: '2026-09-10', author: 'cs-recall',
 })
 
-test('recall refuses unknown products, duplicate tasks and invalid order evidence', (t) => {
-  const { rt, seededCustomerIds } = setup(t)
-  const product = rt.get('Product', 'ITM-101', { actor })!
-  const keyboardOrders = rt.traverse(product, 'orderProducts', { actor })
-  const keyboardIds = new Set(ids(keyboardOrders.objects))
-  const shippedKeyboard = rt.filter(keyboardOrders, (order) => order.properties.status === 'shipped')
-  const customers = rt.pivot(shippedKeyboard, 'customerOrders', { actor })
+test('recall finds ten affected customers and subtracts three existing support tickets', (t) => {
+  const { rt, sources } = setup(t)
+  const { orders, shipped, customers, tickets, covered, selected } = discover(rt)
+  assert.equal(rt.search('Order', { actor }).objects.length, TOTAL_ORDERS)
+  assert.equal(orders.objects.length, KEYBOARD_ORDERS)
+  assert.equal(shipped.objects.length, KEYBOARD_SHIPPED)
+  assert.equal(rt.filter(orders, (order) => order.properties.status === 'pending').objects.length, KEYBOARD_PENDING)
+  assert.equal(rt.filter(orders, (order) => order.properties.status === 'cancelled').objects.length, KEYBOARD_CANCELLED)
+  assert.equal(customers.objects.length, KEYBOARD_CUSTOMERS)
+  assert.equal(tickets.objects.length, 3)
+  assert.deepEqual(ids(covered.objects), ['N-C01', 'N-C02', 'N-C03'])
+  assert.deepEqual(ids(selected.objects), ['N-C04', 'N-C05', 'S-9001', 'S-9002', 'S-9003', 'S-9004', 'S-9005'])
+  assert.equal(sources.support.prepare('SELECT * FROM tickets').all().length, 3)
+  assert.deepEqual(rt.auditLog(), [], 'loading existing support tickets is not an Action attempt')
+})
 
-  let selected: {
-    customer: ObjectInstance
-    valid: ObjectSet
-    pending: ObjectSet
-    shippedNonKeyboard: ObjectSet
-  } | undefined
-  for (const customer of customers.objects) {
-    if (seededCustomerIds.includes(customer.pk)) continue
-    const orders = rt.traverse(customer, 'customerOrders', { actor })
-    const valid = rt.intersect(
-      rt.filter(orders, (order) => order.properties.status === 'shipped'),
-      keyboardOrders,
-    )
-    const pending = rt.intersect(
-      rt.filter(orders, (order) => order.properties.status === 'pending'),
-      keyboardOrders,
-    )
-    const shippedNonKeyboard = rt.filter(
-      orders,
-      (order) => order.properties.status === 'shipped' && !keyboardIds.has(order.pk),
-    )
-    if (valid.objects.length && pending.objects.length && shippedNonKeyboard.objects.length) {
-      selected = { customer, valid, pending, shippedNonKeyboard }
-      break
-    }
+test('seven customer-only requests create support tickets, reject a duplicate and reload complete coverage', (t) => {
+  const { rt, sources } = setup(t)
+  const { selected, covered } = discover(rt)
+  for (const customer of selected.objects) {
+    const params = ticketParams(customer.pk)
+    assert.equal(rt.execute('createRecallTicket', params, { actor }).ok, true)
+    assert.deepEqual(sources.support.prepare('SELECT * FROM tickets WHERE id = ?').get(params.ticketId), {
+      id: params.ticketId, customer_id: customer.pk, product_id: params.productId,
+      note: params.note, recorded_on: params.recordedOn, author: params.author,
+    })
+    const ticket = rt.get('RecallTicket', params.ticketId, { actor })!
+    assert.deepEqual(ids(rt.traverse(ticket, 'customerRecallTickets', { actor }).objects), [customer.pk])
+    assert.deepEqual(ids(rt.traverse(ticket, 'productRecallTickets', { actor }).objects), [params.productId])
   }
-  assert.ok(selected, 'fixture supplies one fresh customer with every invalid-evidence shape')
-  const otherCustomerOrder = shippedKeyboard.objects.find((order) => !selected.valid.objects.some((own) => own.pk === order.pk))!
-  const base = {
-    customerId: selected.customer.pk, productId: product.pk,
-    note: 'Arrange keyboard exchange', recordedOn: '2026-09-10', author: 'cs-recall',
-  }
-  const invalid = [
-    ['REJECT-PENDING', [selected.pending.objects[0].pk]],
-    ['REJECT-OTHER-CUSTOMER', [otherCustomerOrder.pk]],
-    ['REJECT-NON-KEYBOARD', [selected.shippedNonKeyboard.objects[0].pk]],
-    ['REJECT-DUPLICATED-ORDER', [selected.valid.objects[0].pk, selected.valid.objects[0].pk]],
-  ] as const
-  for (const [taskId, orderIds] of invalid) {
-    const result = rt.execute('createRecallTask', { ...base, taskId, orderIds }, { actor })
-    assert.equal(result.ok, false)
-    if (!result.ok) assert.equal(result.error.code, 'INVALID_EVIDENCE')
-    assert.equal(rt.get('RecallTask', taskId, { actor }), undefined)
-  }
-
-  const unknown = rt.execute('createRecallTask', {
-    ...base, taskId: 'REJECT-UNKNOWN', productId: 'ITM-999', orderIds: ids(selected.valid.objects),
-  }, { actor })
-  assert.equal(unknown.ok, false)
-  if (!unknown.ok) assert.equal(unknown.error.code, 'UNKNOWN_PRODUCT')
-  assert.equal(rt.get('RecallTask', 'REJECT-UNKNOWN', { actor }), undefined)
-
-  assert.equal(rt.execute('createRecallTask', {
-    ...base, taskId: 'APPLIED', orderIds: ids(selected.valid.objects),
-  }, { actor }).ok, true)
-  const duplicate = rt.execute('createRecallTask', {
-    ...base, taskId: 'REJECT-DUPLICATE-TASK', orderIds: ids(selected.valid.objects),
-  }, { actor })
+  const duplicate = rt.execute('createRecallTicket', ticketParams(covered.objects[0].pk, 'RT-DUPLICATE'), { actor })
   assert.equal(duplicate.ok, false)
-  if (!duplicate.ok) assert.equal(duplicate.error.code, 'RECALL_TASK_ALREADY_EXISTS')
-  assert.equal(rt.get('RecallTask', 'REJECT-DUPLICATE-TASK', { actor }), undefined)
-})
-
-test('recall tasks and their owned links survive re-indexing', (t) => {
-  const { rt, sources, seededCustomerIds } = setup(t)
-  const product = rt.get('Product', 'ITM-101', { actor })!
-  const keyboardOrders = rt.traverse(product, 'orderProducts', { actor })
-  const shipped = rt.filter(keyboardOrders, (order) => order.properties.status === 'shipped')
-  const customer = rt.pivot(shipped, 'customerOrders', { actor }).objects.find(
-    (candidate) => !seededCustomerIds.includes(candidate.pk),
-  )!
-  const evidence = rt.intersect(
-    rt.filter(rt.traverse(customer, 'customerOrders', { actor }), (order) => order.properties.status === 'shipped'),
-    keyboardOrders,
-  )
-  assert.equal(rt.execute('createRecallTask', {
-    taskId: 'RT-REINDEX', customerId: customer.pk, productId: product.pk,
-    orderIds: ids(evidence.objects), note: 'Arrange keyboard exchange',
-    recordedOn: '2026-09-10', author: 'cs-recall',
-  }, { actor }).ok, true)
+  if (!duplicate.ok) assert.equal(duplicate.error.code, 'RECALL_TICKET_ALREADY_EXISTS')
+  assert.equal(sources.support.prepare('SELECT * FROM tickets').all().length, 10)
+  assert.equal(rt.get('RecallTicket', 'RT-DUPLICATE', { actor }), undefined)
+  assert.equal(rt.auditLog({ status: 'applied' }).length, 7)
+  assert.equal(rt.auditLog({ status: 'rejected' }).length, 1)
 
   rt.load(integrate(sources))
-  const task = rt.get('RecallTask', 'RT-REINDEX', { actor })!
-  assert.deepEqual(ids(rt.traverse(task, 'customerRecallTasks', { actor }).objects), [customer.pk])
-  assert.deepEqual(ids(rt.traverse(task, 'productRecallTasks', { actor }).objects), [product.pk])
-  assert.deepEqual(ids(rt.traverse(task, 'recallTaskOrders', { actor }).objects), ids(evidence.objects))
-  assert.equal(rt.search('RecallTask', { actor }).objects.length, 4)
+  const refreshed = discover(rt)
+  assert.equal(refreshed.tickets.objects.length, 10)
+  assert.equal(refreshed.covered.objects.length, 10)
+  assert.deepEqual(refreshed.selected.objects, [])
+  assert.equal(rt.auditLog().length, 8)
 })
 
-test('MCP clients find recall customers and receive machine-readable refusals for duplicate tasks', async (t) => {
-  const app = setup(t)
-  const server = buildMcpServer(app.rt, { agent: 'cs-agent' })
+test('the Action refuses unknown products and customers without a shipped order of the product', (t) => {
+  const { rt, sources } = setup(t)
+  for (const [customerId, productId, code] of [
+    ['N-C04', 'ITM-999', 'UNKNOWN_PRODUCT'],
+    ['N-C06', 'ITM-101', 'NO_SHIPPED_ORDER'], // pending keyboard only
+    ['N-C09', 'ITM-101', 'NO_SHIPPED_ORDER'], // cancelled keyboard only
+    ['N-C10', 'ITM-101', 'NO_SHIPPED_ORDER'], // no keyboard order
+  ]) {
+    const params = { ...ticketParams(customerId), productId }
+    const result = rt.execute('createRecallTicket', params, { actor })
+    assert.equal(result.ok, false)
+    if (!result.ok) assert.equal(result.error.code, code)
+    assert.equal(rt.get('RecallTicket', params.ticketId, { actor }), undefined)
+  }
+  assert.equal(sources.support.prepare('SELECT * FROM tickets').all().length, 3)
+  assert.equal(rt.search('RecallTicket', { actor }).objects.length, 3)
+})
+
+test('a prior selection does not bypass the Action eligibility check after an ERP refresh', (t) => {
+  const { rt, sources } = setup(t)
+  assert.ok(ids(discover(rt).selected.objects).includes('N-C04'))
+  sources.north.prepare(`
+    UPDATE tbl_order SET stat = 0 WHERE cust_cd = 'C04'
+      AND order_no IN (SELECT order_no FROM tbl_order_line WHERE item_cd = 'ITM-101')
+  `).run()
+  rt.load(integrate(sources))
+  // This customer still has a shipped non-keyboard order and pending keyboards.
+  // Those two facts must not be mistaken for a shipped keyboard order.
+  const customer = rt.get('Customer', 'N-C04', { actor })!
+  assert.ok(rt.traverse(customer, 'customerOrders', { actor }).objects.some((order) => order.properties.status === 'shipped'))
+  const result = rt.execute('createRecallTicket', ticketParams(customer.pk), { actor })
+  assert.equal(result.ok, false)
+  if (!result.ok) assert.equal(result.error.code, 'NO_SHIPPED_ORDER')
+  assert.equal(sources.support.prepare('SELECT * FROM tickets').all().length, 3)
+})
+
+test('a ticket for another product does not exclude the customer; source updates replace indexed ticket state', (t) => {
+  const { rt, sources } = setup(t)
+  sources.support.prepare('INSERT INTO tickets VALUES (?, ?, ?, ?, ?, ?)')
+    .run('RT-MONITOR', 'N-C04', 'ITM-100', 'Monitor exchange', '2026-09-09', 'cs-phone')
+  rt.load(integrate(sources))
+  const { selected } = discover(rt)
+  assert.equal(selected.objects.length, 7)
+  assert.ok(ids(selected.objects).includes('N-C04'))
+  const params = ticketParams('N-C04')
+  assert.equal(rt.execute('createRecallTicket', params, { actor }).ok, true)
+
+  sources.support.prepare('UPDATE tickets SET note = ? WHERE id = ?').run('Support corrected this note', params.ticketId)
+  rt.load(integrate(sources))
+  const ticket = rt.get('RecallTicket', params.ticketId, { actor })!
+  assert.equal(ticket.properties.note, 'Support corrected this note')
+  assert.deepEqual(ids(rt.traverse(ticket, 'customerRecallTickets', { actor }).objects), ['N-C04'])
+  assert.deepEqual(ids(rt.traverse(ticket, 'productRecallTickets', { actor }).objects), ['ITM-101'])
+  assert.equal(discover(rt).selected.objects.length, 6)
+})
+
+test('the support system refuses a duplicate created after indexing without leaving a local ticket or links', (t) => {
+  const { rt, sources } = setup(t)
+  sources.support.prepare('INSERT INTO tickets VALUES (?, ?, ?, ?, ?, ?)')
+    .run('RT-UPSTREAM', 'N-C04', 'ITM-101', 'Created by support', '2026-09-10', 'cs-phone')
+  const params = ticketParams('N-C04')
+  const result = rt.execute('createRecallTicket', params, { actor })
+  assert.equal(result.ok, false)
+  if (!result.ok) assert.equal(result.error.code, 'WRITEBACK_FAILED')
+  assert.equal(rt.get('RecallTicket', params.ticketId, { actor }), undefined)
+  const customer = rt.get('Customer', params.customerId, { actor })!
+  assert.deepEqual(rt.traverse(customer, 'customerRecallTickets', { actor }).objects, [])
+  assert.equal(sources.support.prepare('SELECT * FROM tickets WHERE id = ?').get(params.ticketId), undefined)
+  assert.equal(sources.support.prepare('SELECT * FROM tickets').all().length, 4)
+  assert.equal(rt.auditLog()[0].error?.code, 'WRITEBACK_FAILED')
+  assert.equal(rt.auditLog()[0].edits?.length, 3)
+  rt.load(integrate(sources))
+  assert.deepEqual(ids(rt.traverse(customer, 'customerRecallTickets', { actor }).objects), ['RT-UPSTREAM'])
+})
+
+test('MCP clients pivot, subtract and create a support ticket without supplying order IDs', async (t) => {
+  const { rt, sources } = setup(t)
+  const server = buildMcpServer(rt, { agent: 'cs-agent' })
   const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair()
   const client = new Client({ name: 'recall-test', version: '0.0.0' })
   await Promise.all([server.connect(serverTransport), client.connect(clientTransport)])
@@ -200,38 +170,28 @@ test('MCP clients find recall customers and receive machine-readable refusals fo
   }
 
   const product = await call<ObjectInstance>('get_product', { id: 'ITM-101' })
-  const keyboardOrders = await call<ObjectSet>('traverse_order_products', { source: product })
-  assert.equal(keyboardOrders.objects.length, KEYBOARD_ORDERS)
-  const shipped = keyboardOrders.objects.filter((order) => order.properties.status === 'shipped')
-  const customers = await call<ObjectSet>('pivot_customer_orders', {
-    source: { type: 'Order', pks: ids(shipped) },
+  const orders = await call<ObjectSet>('traverse_order_products', { source: product })
+  const shipped = orders.objects.filter((order) => order.properties.status === 'shipped')
+  const customers = await call<ObjectSet>('pivot_customer_orders', { source: { type: 'Order', pks: ids(shipped) } })
+  const tickets = await call<ObjectSet>('traverse_product_recall_tickets', { source: product })
+  const covered = await call<ObjectSet>('pivot_customer_recall_tickets', {
+    source: { type: 'RecallTicket', pks: ids(tickets.objects) },
   })
-  assert.equal(customers.objects.length, KEYBOARD_CUSTOMERS)
-  const fresh = customers.objects.find((customer) => !app.seededCustomerIds.includes(customer.pk))!
-  const seeded = customers.objects.find((customer) => app.seededCustomerIds.includes(customer.pk))!
-  const shippedIds = new Set(ids(shipped))
-  async function evidence(customer: ObjectInstance) {
-    const orders = await call<ObjectSet>('traverse_customer_orders', { source: customer })
-    return orders.objects.filter((order) => shippedIds.has(order.pk)).map((order) => order.pk)
-  }
-  await call('create_recall_task', {
-    taskId: 'RT-MCP', customerId: fresh.pk, productId: product.pk, orderIds: await evidence(fresh),
-    note: 'Arrange keyboard exchange', recordedOn: '2026-09-10', author: 'cs-agent',
-  })
+  const selected = await call<ObjectSet>('subtract_customer', { left: ids(customers.objects), right: ids(covered.objects) })
+  assert.equal(selected.objects.length, 7)
+  await call('create_recall_ticket', ticketParams(selected.objects[0].pk, 'RT-MCP'))
+  assert.equal(sources.support.prepare('SELECT * FROM tickets').all().length, 4)
+
   const refused = await client.callTool({
-    name: 'create_recall_task',
-    arguments: {
-      taskId: 'RT-MCP-REFUSED', customerId: seeded.pk, productId: product.pk, orderIds: await evidence(seeded),
-      note: 'Arrange keyboard exchange', recordedOn: '2026-09-10', author: 'cs-agent',
-    },
+    name: 'create_recall_ticket', arguments: ticketParams(covered.objects[0].pk, 'RT-MCP-REFUSED'),
   })
   assert.equal(refused.isError, true)
   assert.ok(Array.isArray(refused.content))
   const refusalBlock = refused.content[0]
   assert.equal(refusalBlock.type, 'text')
-  assert.equal(JSON.parse(refusalBlock.text as string).error.code, 'RECALL_TASK_ALREADY_EXISTS')
-
+  assert.equal(JSON.parse(refusalBlock.text as string).error.code, 'RECALL_TICKET_ALREADY_EXISTS')
   const audit = await call<AuditEntry[]>('read_audit_log', {})
-  assert.ok(audit.some((entry) =>
-    entry.status === 'rejected' && entry.actor === 'agent:cs-agent' && entry.error?.code === 'RECALL_TASK_ALREADY_EXISTS'))
+  assert.deepEqual(audit.map((entry) => [entry.status, entry.actor]), [
+    ['applied', 'agent:cs-agent'], ['rejected', 'agent:cs-agent'],
+  ])
 })

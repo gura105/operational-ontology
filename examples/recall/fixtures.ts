@@ -1,6 +1,6 @@
 /**
- * Two legacy order systems left over from an acquisition. Their schemas and
- * status encodings differ; in-memory databases keep every run isolated.
+ * Two legacy ERPs and a customer-support system. The ERPs use different
+ * schemas and status codes; in-memory databases keep every run isolated.
  */
 import Database from 'better-sqlite3'
 
@@ -135,8 +135,7 @@ export function createFixtures() {
       line.run(orderId, 'ITM-101', 1)
       line.run(orderId, extra[0], 1)
     }
-    // The first filler order is fixed: C04 also has a pending keyboard order, so it
-    // gives scenario.test.ts a shipped order without the product for INVALID_EVIDENCE.
+    // Keep one shipped order of a different product for the eligibility tests.
     for (let index = northKeyboard.length; index < 150; index++) {
       const orderId = `A-${1001 + index}`
       const customerId = index === northKeyboard.length
@@ -190,7 +189,23 @@ export function createFixtures() {
     }
   })()
 
-  return { north, south }
+  const support = new Database(':memory:')
+  support.exec(`
+    CREATE TABLE tickets (
+      id TEXT PRIMARY KEY,
+      customer_id TEXT NOT NULL, product_id TEXT NOT NULL,
+      note TEXT NOT NULL, recorded_on TEXT NOT NULL, author TEXT NOT NULL,
+      UNIQUE (customer_id, product_id)
+    );
+  `)
+  // Yesterday's phone intake already lives in the support system. References
+  // use the integrated customer IDs because the two ERPs have separate keys.
+  const ticket = support.prepare('INSERT INTO tickets VALUES (?, ?, ?, ?, ?, ?)')
+  for (const [index, customerId] of ['N-C01', 'N-C02', 'N-C03'].entries()) {
+    ticket.run(`RT-PHONE-${index + 1}`, customerId, 'ITM-101',
+      'Customer phoned about keyboard defect; exchange follow-up requested', '2026-09-09', 'cs-phone')
+  }
+  return { north, south, support }
 }
 
 export type RecallDbs = ReturnType<typeof createFixtures>

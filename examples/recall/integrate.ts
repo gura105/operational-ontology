@@ -1,10 +1,10 @@
-/** Data-layer hand-off: normalize two legacy order systems into one snapshot. */
+/** Data-layer hand-off: normalize two ERPs and support tickets into one snapshot. */
 import type { RecallDbs } from './fixtures.js'
 
 const NORTH_STATUS: Record<number, string> = { 0: 'pending', 1: 'shipped', 2: 'cancelled' }
 const SOUTH_STATUS: Record<string, string> = { OPEN: 'pending', SHIPPED: 'shipped', CANCELLED: 'cancelled' }
 
-export function integrate({ north, south }: RecallDbs) {
+export function integrate({ north, south, support }: RecallDbs) {
   const customers = [
     ...north.prepare('SELECT cust_cd, cust_nm, pref_nm FROM tbl_cust').all().map((r: any) => ({
       id: `N-${r.cust_cd}`, name: r.cust_nm as string, region: r.pref_nm as string,
@@ -41,8 +41,21 @@ export function integrate({ north, south }: RecallDbs) {
       `S-${r.ORDER_ID}`, r.ITEM_ID as string,
     ]),
   ]
+  const tickets = support.prepare('SELECT id, customer_id, product_id, note, recorded_on, author FROM tickets')
+    .all() as Array<{
+      id: string; customer_id: string; product_id: string; note: string; recorded_on: string; author: string
+    }>
   return {
-    objects: { Customer: customers, Order: orders.map((order) => order.row), Product: products },
-    links: { customerOrders, orderProducts },
+    objects: {
+      Customer: customers, Order: orders.map((order) => order.row), Product: products,
+      RecallTicket: tickets.map((ticket) => ({
+        id: ticket.id, note: ticket.note, recordedOn: ticket.recorded_on, author: ticket.author,
+      })),
+    },
+    links: {
+      customerOrders, orderProducts,
+      customerRecallTickets: tickets.map((ticket): [string, string] => [ticket.customer_id, ticket.id]),
+      productRecallTickets: tickets.map((ticket): [string, string] => [ticket.product_id, ticket.id]),
+    },
   }
 }
