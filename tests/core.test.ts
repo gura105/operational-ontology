@@ -143,9 +143,9 @@ const ontology = defineOntology({
       ],
       writeback: true,
     }),
-    conjureSource: defineAction(objects, {
-      // A schema-valid creation of a source-backed object — undemonstrated
-      // territory, so refused by declaration.
+    mixedCreate: defineAction(objects, {
+      // Source-backed existence and explicit owned values cannot share an edit,
+      // even when an owned value equals its declared default.
       object: 'Order',
       targetParam: 'orderId',
       params: { orderId: z.string() },
@@ -604,11 +604,11 @@ test('a plan straddling the authority line is refused — within one edit or acr
   if (!acrossTwo.ok) assert.equal(acrossTwo.error.code, 'MIXED_AUTHORITY')
 })
 
-test('creating a source-backed object is refused by declaration', () => {
+test('a source-backed create cannot explicitly supply owned properties', () => {
   const rt = setup()
-  const result = rt.execute('conjureSource', { orderId: 'O2' }, { actor: 'test' })
+  const result = rt.execute('mixedCreate', { orderId: 'O2' }, { actor: 'test' })
   assert.equal(result.ok, false)
-  if (!result.ok) assert.equal(result.error.code, 'SOURCE_CREATE_UNSUPPORTED')
+  if (!result.ok) assert.equal(result.error.code, 'MIXED_AUTHORITY')
   assert.equal(rt.get('Order', 'N1', asTest), undefined)
 })
 

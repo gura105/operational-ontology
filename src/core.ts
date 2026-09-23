@@ -72,9 +72,10 @@ export interface ObjectTypeDef<S extends Properties = Properties> {
    *   No source supplies its rows (`load()` refuses them); actions create and
    *   modify them without write-back; they survive re-indexing untouched.
    * - `owned: { prop: default }` — these properties are ontology-owned on
-   *   otherwise source-backed rows. A loaded row must NOT supply them (the
-   *   source has no authority over them); they start at the declared default,
-   *   change only through actions, and survive re-indexing via the overlay.
+   *   otherwise source-backed rows. Loaded rows and source-backed creates
+   *   must NOT supply them (the source has no authority over them); they start
+   *   at the declared default, change only through actions, and survive
+   *   re-indexing via the overlay.
    */
   owned?: true | Partial<z.input<z.ZodObject<S>>>
   /**
@@ -201,6 +202,7 @@ export const modify = (object: ObjectInstance, changes: Record<string, unknown>)
 })
 // These helpers only describe edits. Names, payloads and relationship constraints
 // are checked against the model during preflight, before any write-back occurs.
+// A source-backed create supplies source properties only; owned defaults are local.
 export const create = (object: string, pk: string, data: Record<string, unknown>): Edit => ({
   op: 'create',
   object,
@@ -332,7 +334,9 @@ export function defineOntology<Model extends OntologyDef>(def: Model): Model {
  * only to the systems of record; that boundary is a declared contract, not
  * an enforced one (see "Transaction ownership" in docs/IMPLEMENTATION.md). It
  * receives its own copies of the plan and the target object, so nothing it
- * mutates leaks back into the runtime.
+ * mutates leaks back into the runtime. For a source-backed create, persist the
+ * supplied identity and source properties; owned defaults stay local. Returning
+ * source-generated IDs or replacement values is not supported.
  */
 export interface WritebackAdapter {
   apply(
@@ -886,14 +890,15 @@ export class Runtime<Model extends OntologyDef = OntologyDef> {
     }
     const def = this.#objectDef(edit.object)
     if (def.owned === true) return 'ontology'
+    const ownedKeys = def.owned ? Object.keys(def.owned) : []
     if (edit.op === 'create') {
+      if (!Object.keys(edit.data).some((key) => ownedKeys.includes(key))) return 'source'
       return reject(
-        'SOURCE_CREATE_UNSUPPORTED',
-        `cannot create ${edit.object}/${edit.pk}: the type is source-backed, and creation is supported ` +
-          'for ontology-owned types only — creating at the source is undemonstrated, so undeclared',
+        'MIXED_AUTHORITY',
+        `create on ${edit.object}/${edit.pk} supplies ontology-owned properties on a source-backed type — ` +
+          'omit them to use their declared defaults, then change them in a separate action',
       )
     }
-    const ownedKeys = def.owned ? Object.keys(def.owned) : []
     const touched = Object.keys(edit.changes)
     const owned = touched.filter((key) => ownedKeys.includes(key))
     if (owned.length === 0) return 'source'
@@ -1054,7 +1059,10 @@ export class Runtime<Model extends OntologyDef = OntologyDef> {
         throw new Error(`unknown propert${unknown.length > 1 ? 'ies' : 'y'} "${unknown.join('", "')}" on ${edit.object}`)
       }
       if (edit.op === 'create') {
-        const data = schema.parse(edit.data)
+        // Like load(), initialize owned properties locally. The adapter receives
+        // only the source payload; explicit owned writes are refused by authority.
+        const defaults = def.owned && def.owned !== true ? def.owned : {}
+        const data = schema.parse({ ...defaults, ...edit.data })
         if (String(data[def.primaryKey]) !== edit.pk) {
           throw new Error(
             `create pk mismatch for ${edit.object}: edit says "${edit.pk}", data says "${String(data[def.primaryKey])}"`,

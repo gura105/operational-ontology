@@ -191,7 +191,7 @@ https://github.com/user-attachments/assets/2b811ee7-bff2-4694-b3bf-bf0f6ccc85d5
 
 ランタイムは同期的なアクション実行と SQLite でパターンを示します。UI ビルダー、パイプラインフレームワーク、大規模なインデクシング基盤、汎用の認可システムは含みません。書き込みゲートは、呼び出し側と同じプロセス内での API 上の契約です。こうした範囲に絞って、実装の読みやすさを保ちます。
 
-生成できるのは ontology-owned なオブジェクトだけで、削除・リンク属性・複合主キーは未対応です。そのほかの制約と API の詳細は[実装ノート](./IMPLEMENTATION.ja.md#現在の制約)にまとめています。公開済みの版は [release notes](https://github.com/gura105/operational-ontology/releases) にあります。
+Action は実行前に指定した ID を使い、ontology-owned なオブジェクトや、write-back を通じた source-backed なレコードを作成できます。削除・リンク属性・複合主キーは未対応です。そのほかの制約と API の詳細は[実装ノート](./IMPLEMENTATION.ja.md#現在の制約)にまとめています。公開済みの版は [release notes](https://github.com/gura105/operational-ontology/releases) にあります。
 
 ## FAQ
 

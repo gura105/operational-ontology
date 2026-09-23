@@ -190,7 +190,7 @@ https://github.com/user-attachments/assets/28327062-e09f-4103-943e-434a0e55b327
 
 运行时通过同步动作执行和 SQLite 展示该模式。它不包含 UI 构建器、流水线框架、可扩展的索引服务或通用授权系统。写入入口是调用方进程内的 API 契约。这样的范围使实现保持易读。
 
-仅支持创建本体拥有的对象；不支持删除、链接属性和复合主键。[实现说明（英文）](./IMPLEMENTATION.md#current-limits)记录了其余限制和 API 细节。已发布版本见 [release notes（英文）](https://github.com/gura105/operational-ontology/releases)。
+Action 使用执行前指定的 ID，可以创建本体拥有的对象，也可以通过写回创建源系统拥有的记录。不支持删除、链接属性和复合主键。[实现说明（英文）](./IMPLEMENTATION.md#current-limits)记录了其余限制和 API 细节。已发布版本见 [release notes（英文）](https://github.com/gura105/operational-ontology/releases)。
 
 ## 常见问题
 
