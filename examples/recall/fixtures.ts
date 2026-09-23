@@ -10,7 +10,7 @@ export const KEYBOARD_ORDERS = 48
 export const KEYBOARD_SHIPPED = 31
 export const KEYBOARD_PENDING = 14
 export const KEYBOARD_CANCELLED = 3
-export const KEYBOARD_CUSTOMERS = 27
+export const KEYBOARD_CUSTOMERS = 10
 
 const PRODUCTS = [
   ['ITM-100', 'Monitor 27"', 30, 26_000],
@@ -72,8 +72,10 @@ const SOUTH_CUSTOMERS = [
 ] as const
 
 const northKeyboard: Array<{ customer: string; status: Status }> = [
-  ...NORTH_CUSTOMERS.slice(0, 14).map(([customer]) => ({ customer, status: 'shipped' as const })),
-  { customer: 'C01', status: 'shipped' }, { customer: 'C02', status: 'shipped' },
+  // Repeat purchases: 16 shipped orders across five north customers.
+  ...Array.from({ length: 16 }, (_, index) => ({
+    customer: NORTH_CUSTOMERS[index % 5][0], status: 'shipped' as const,
+  })),
   { customer: 'C01', status: 'pending' }, { customer: 'C03', status: 'pending' },
   { customer: 'C04', status: 'pending' }, { customer: 'C05', status: 'pending' },
   { customer: 'C06', status: 'pending' }, { customer: 'C07', status: 'pending' },
@@ -81,8 +83,10 @@ const northKeyboard: Array<{ customer: string; status: Status }> = [
 ]
 
 const southKeyboard: Array<{ customer: string; status: Status }> = [
-  ...SOUTH_CUSTOMERS.slice(0, 13).map(([customer]) => ({ customer, status: 'shipped' as const })),
-  { customer: '9001', status: 'shipped' }, { customer: '9002', status: 'shipped' },
+  // Fifteen shipped orders across five south customers: ten customers in all.
+  ...Array.from({ length: 15 }, (_, index) => ({
+    customer: SOUTH_CUSTOMERS[index % 5][0], status: 'shipped' as const,
+  })),
   { customer: '9001', status: 'pending' }, { customer: '9003', status: 'pending' },
   { customer: '9004', status: 'pending' }, { customer: '9005', status: 'pending' },
   { customer: '9006', status: 'pending' }, { customer: '9007', status: 'pending' },

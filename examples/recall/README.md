@@ -12,16 +12,18 @@ The model reuses the orders example's Customer, Order and Product, with the unus
 | --- | --- |
 | Find orders containing keyboard ITM-101 | 48 of 300 orders |
 | Filter by fulfilment status | 31 shipped (14 pending, 3 cancelled) |
-| Pivot shipped orders to customers | 27 customers |
-| Execute `createRecallTask` once per customer | 24 applied, 3 refused with `RECALL_TASK_ALREADY_EXISTS` |
-| Verify recall tasks | 27/27 customers have a task |
-| Read the audit log | 30 entries |
+| Pivot shipped orders to customers | 10 customers |
+| Execute `createRecallTask` once per customer | 7 applied, 3 refused with `RECALL_TASK_ALREADY_EXISTS` |
+| Verify recall tasks | 10/10 customers have a task |
+| Read the audit log | 13 entries |
+
+The 31 shipped keyboard orders are repeat purchases by ten customers, with three or four orders per customer. Pivot deduplicates these orders into ten customers, so each customer needs only one task.
 
 The `createRecallTask` Action checks the current indexed state: that the product exists (`UNKNOWN_PRODUCT`), that the customer does not already have a task for the product (`RECALL_TASK_ALREADY_EXISTS`), and that every supplied order is distinct, shipped to that customer and contains the product (`INVALID_EVIDENCE`). It creates the task and its evidence links atomically, but sends no message and does not change orders or stock. Re-indexing source data preserves the ontology-owned tasks and links.
 
 A task records planned follow-up, not completed contact or exchange. It is stored in the ontology; this example does not register tasks in an external CRM. Evidence links retain the selected record identities, and the audit log records Action attempts. They do not preserve source record snapshots, exploration history or the reasons other customers were excluded.
 
-> This demo calls the action once per customer, 27 times. As a minimal reference implementation it favors one invocation per audit entry. In production, a bulk action that validates every target before applying any, or that stops at the first refusal, is often the more realistic design. Either way the properties stay the same: refusals are named, and every attempt is recorded.
+> This demo calls the action once per customer, 10 times. As a minimal reference implementation it favors one invocation per audit entry. In production, a bulk action that validates every target before applying any, or that stops at the first refusal, is often the more realistic design. Either way the properties stay the same: refusals are named, and every attempt is recorded.
 
 ## Code and MCP
 

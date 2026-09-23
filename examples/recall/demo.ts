@@ -50,7 +50,7 @@ try {
   h('4. Write: record one exchange-contact task per customer')
   let applied = 0
   let rejected = 0
-  // This demo calls the action once per customer, 27 times. As a minimal reference
+  // This demo calls the action once per customer, 10 times. As a minimal reference
   // implementation it favors one invocation per audit entry. In production, a bulk
   // action that validates every target before applying any, or that stops at the
   // first refusal, is often the more realistic design. Either way the properties
@@ -88,7 +88,7 @@ try {
   log(`${audit.length} audit entries: applied ${audit.filter((entry) => entry.status === 'applied').length}, rejected ${audit.filter((entry) => entry.status === 'rejected').length}.`)
 
   pause()
-  log('\nThe check for existing tasks lives in the ontology, so the twenty-seventh call meets the same rule as the first.')
+  log('\nThe check for existing tasks lives in the ontology, so the tenth call meets the same rule as the first.')
 } finally {
   app.close()
 }

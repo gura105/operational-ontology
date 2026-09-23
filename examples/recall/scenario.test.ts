@@ -64,7 +64,7 @@ test('recall records one task per affected customer and preserves each task\'s o
       rejected.push(customer.pk)
     }
   }
-  assert.equal(applied.length, 24)
+  assert.equal(applied.length, 7)
   assert.equal(rejected.length, 3)
   assert.deepEqual(rejected, seededCustomerIds)
 
@@ -81,8 +81,8 @@ test('recall records one task per affected customer and preserves each task\'s o
     assert.deepEqual(ids(rt.traverse(task, 'recallTaskOrders', { actor }).objects), ids(expected.objects))
   }
   assert.equal(rt.traverse(product, 'productRecallTasks', { actor }).objects.length, KEYBOARD_CUSTOMERS)
-  assert.equal(rt.auditLog().length, 30)
-  assert.equal(rt.auditLog({ status: 'applied' }).length, 27)
+  assert.equal(rt.auditLog().length, 13)
+  assert.equal(rt.auditLog({ status: 'applied' }).length, 10)
   assert.equal(rt.auditLog({ status: 'rejected' }).length, 3)
 })
 
