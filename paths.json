@@ -193,5 +193,70 @@
         "uniques": 8
       }
     ]
+  },
+  {
+    "date": "2026-09-28",
+    "paths": [
+      {
+        "path": "/gura105/operational-ontology",
+        "title": "Overview",
+        "count": 1097,
+        "uniques": 679
+      },
+      {
+        "path": "/gura105/operational-ontology/blob/main/README.ja.md",
+        "title": "/blob/main/README.ja.md",
+        "count": 81,
+        "uniques": 44
+      },
+      {
+        "path": "/gura105/operational-ontology/tree/main",
+        "title": "/tree/main",
+        "count": 29,
+        "uniques": 17
+      },
+      {
+        "path": "/gura105/operational-ontology/tree/main/examples",
+        "title": "/tree/main/examples",
+        "count": 22,
+        "uniques": 15
+      },
+      {
+        "path": "/gura105/operational-ontology/blob/main/examples/orders/ontology.ts",
+        "title": "/blob/main/examples/orders/ontology.ts",
+        "count": 21,
+        "uniques": 12
+      },
+      {
+        "path": "/gura105/operational-ontology/blob/main/docs/README.zh-CN.md",
+        "title": "/blob/main/docs/README.zh-CN.md",
+        "count": 20,
+        "uniques": 15
+      },
+      {
+        "path": "/gura105/operational-ontology/blob/main/examples/hospital/README.ja.md",
+        "title": "/blob/main/examples/hospital/README.ja.md",
+        "count": 15,
+        "uniques": 11
+      },
+      {
+        "path": "/gura105/operational-ontology/blob/main/examples/finance/README.ja.md",
+        "title": "/blob/main/examples/finance/README.ja.md",
+        "count": 12,
+        "uniques": 9
+      },
+      {
+        "path": "/gura105/operational-ontology/forks",
+        "title": "/forks",
+        "count": 11,
+        "uniques": 2
+      },
+      {
+        "path": "/gura105/operational-ontology/graphs/traffic",
+        "title": "/graphs/traffic",
+        "count": 11,
+        "uniques": 1
+      }
+    ]
   }
 ]
