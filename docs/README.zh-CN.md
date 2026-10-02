@@ -19,6 +19,7 @@
 
 ```sh
 pnpm install
+pnpm typecheck # 检查 TypeScript 类型
 pnpm demo    # 物理数据 → 集成 → 索引 → 读取 → 写入 → 拒绝 → 写回
 pnpm test    # 验证行为
 ```

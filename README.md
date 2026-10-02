@@ -19,6 +19,7 @@ Requires Node.js 24 or later and pnpm.
 
 ```sh
 pnpm install
+pnpm typecheck # verify TypeScript types
 pnpm demo    # physical data → integrate → index → read → write → refusal → write-back
 pnpm test    # verify the behavior
 ```

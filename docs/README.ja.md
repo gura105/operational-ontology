@@ -19,6 +19,7 @@ Node.js 24 以降と pnpm が必要です。
 
 ```sh
 pnpm install
+pnpm typecheck # TypeScript の型を検証する
 pnpm demo    # 物理データ → 統合 → インデックス → 読み取り → 書き込み → 拒否 → 書き戻し
 pnpm test    # 振る舞いを検証する
 ```
