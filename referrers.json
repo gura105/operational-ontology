@@ -218,5 +218,60 @@
         "uniques": 5
       }
     ]
+  },
+  {
+    "date": "2026-10-05",
+    "referrers": [
+      {
+        "referrer": "github.com",
+        "count": 125,
+        "uniques": 58
+      },
+      {
+        "referrer": "linkedin.com",
+        "count": 114,
+        "uniques": 84
+      },
+      {
+        "referrer": "Google",
+        "count": 61,
+        "uniques": 45
+      },
+      {
+        "referrer": "com.linkedin.android",
+        "count": 38,
+        "uniques": 36
+      },
+      {
+        "referrer": "t.co",
+        "count": 21,
+        "uniques": 14
+      },
+      {
+        "referrer": "chatgpt.com",
+        "count": 20,
+        "uniques": 15
+      },
+      {
+        "referrer": "dataengineeringweekly.com",
+        "count": 16,
+        "uniques": 10
+      },
+      {
+        "referrer": "qiita.com",
+        "count": 13,
+        "uniques": 11
+      },
+      {
+        "referrer": "note.com",
+        "count": 5,
+        "uniques": 4
+      },
+      {
+        "referrer": "teams.public.onecdn.static.microsoft",
+        "count": 3,
+        "uniques": 3
+      }
+    ]
   }
 ]

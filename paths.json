@@ -258,5 +258,70 @@
         "uniques": 1
       }
     ]
+  },
+  {
+    "date": "2026-10-05",
+    "paths": [
+      {
+        "path": "/gura105/operational-ontology",
+        "title": "Overview",
+        "count": 743,
+        "uniques": 443
+      },
+      {
+        "path": "/gura105/operational-ontology/blob/main/docs/README.zh-CN.md",
+        "title": "/blob/main/docs/README.zh-CN.md",
+        "count": 46,
+        "uniques": 37
+      },
+      {
+        "path": "/gura105/operational-ontology/blob/main/docs/README.ja.md",
+        "title": "/blob/main/docs/README.ja.md",
+        "count": 24,
+        "uniques": 15
+      },
+      {
+        "path": "/gura105/operational-ontology/tree/main",
+        "title": "/tree/main",
+        "count": 24,
+        "uniques": 15
+      },
+      {
+        "path": "/gura105/operational-ontology/pulse",
+        "title": "/pulse",
+        "count": 17,
+        "uniques": 3
+      },
+      {
+        "path": "/gura105/operational-ontology/blob/main/README.ja.md",
+        "title": "/blob/main/README.ja.md",
+        "count": 16,
+        "uniques": 10
+      },
+      {
+        "path": "/gura105/operational-ontology/blob/main/examples/hospital/README.ja.md",
+        "title": "/blob/main/examples/hospital/README.ja.md",
+        "count": 11,
+        "uniques": 8
+      },
+      {
+        "path": "/gura105/operational-ontology/blob/main/docs/assets/hero-diagram.svg",
+        "title": "/blob/main/docs/assets/hero-diagram.svg",
+        "count": 9,
+        "uniques": 9
+      },
+      {
+        "path": "/gura105/operational-ontology/blob/main/examples/orders/ontology.ts",
+        "title": "/blob/main/examples/orders/ontology.ts",
+        "count": 9,
+        "uniques": 7
+      },
+      {
+        "path": "/gura105/operational-ontology/graphs/traffic",
+        "title": "/graphs/traffic",
+        "count": 9,
+        "uniques": 1
+      }
+    ]
   }
 ]

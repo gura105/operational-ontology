@@ -123,5 +123,60 @@
     "date": "2026-09-23",
     "count": 136,
     "uniques": 51
+  },
+  {
+    "date": "2026-09-24",
+    "count": 56,
+    "uniques": 32
+  },
+  {
+    "date": "2026-09-25",
+    "count": 75,
+    "uniques": 40
+  },
+  {
+    "date": "2026-09-26",
+    "count": 23,
+    "uniques": 18
+  },
+  {
+    "date": "2026-09-27",
+    "count": 69,
+    "uniques": 42
+  },
+  {
+    "date": "2026-09-28",
+    "count": 85,
+    "uniques": 54
+  },
+  {
+    "date": "2026-09-29",
+    "count": 75,
+    "uniques": 44
+  },
+  {
+    "date": "2026-09-30",
+    "count": 52,
+    "uniques": 31
+  },
+  {
+    "date": "2026-10-01",
+    "count": 66,
+    "uniques": 32
+  },
+  {
+    "date": "2026-10-02",
+    "count": 44,
+    "uniques": 31
+  },
+  {
+    "date": "2026-10-03",
+    "count": 39,
+    "uniques": 16
+  },
+  {
+    "date": "2026-10-04",
+    "count": 26,
+    "uniques": 19
   }
 ]
