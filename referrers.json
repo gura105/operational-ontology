@@ -273,5 +273,60 @@
         "uniques": 3
       }
     ]
+  },
+  {
+    "date": "2026-10-12",
+    "referrers": [
+      {
+        "referrer": "github.com",
+        "count": 65,
+        "uniques": 44
+      },
+      {
+        "referrer": "Google",
+        "count": 44,
+        "uniques": 32
+      },
+      {
+        "referrer": "linkedin.com",
+        "count": 29,
+        "uniques": 17
+      },
+      {
+        "referrer": "dataengineeringweekly.com",
+        "count": 13,
+        "uniques": 5
+      },
+      {
+        "referrer": "teams.public.onecdn.static.microsoft",
+        "count": 10,
+        "uniques": 8
+      },
+      {
+        "referrer": "t.co",
+        "count": 10,
+        "uniques": 7
+      },
+      {
+        "referrer": "qiita.com",
+        "count": 6,
+        "uniques": 5
+      },
+      {
+        "referrer": "com.linkedin.android",
+        "count": 5,
+        "uniques": 5
+      },
+      {
+        "referrer": "Bing",
+        "count": 4,
+        "uniques": 3
+      },
+      {
+        "referrer": "note.com",
+        "count": 4,
+        "uniques": 3
+      }
+    ]
   }
 ]
