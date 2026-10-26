@@ -453,5 +453,70 @@
         "uniques": 5
       }
     ]
+  },
+  {
+    "date": "2026-10-26",
+    "paths": [
+      {
+        "path": "/gura105/operational-ontology",
+        "title": "Overview",
+        "count": 200,
+        "uniques": 151
+      },
+      {
+        "path": "/gura105/operational-ontology/blob/main/docs/README.zh-CN.md",
+        "title": "/blob/main/docs/README.zh-CN.md",
+        "count": 18,
+        "uniques": 16
+      },
+      {
+        "path": "/gura105/operational-ontology/blob/main/docs/README.ja.md",
+        "title": "/blob/main/docs/README.ja.md",
+        "count": 18,
+        "uniques": 15
+      },
+      {
+        "path": "/gura105/operational-ontology/tree/main",
+        "title": "/tree/main",
+        "count": 17,
+        "uniques": 9
+      },
+      {
+        "path": "/gura105/operational-ontology/tree/main/src",
+        "title": "/tree/main/src",
+        "count": 11,
+        "uniques": 10
+      },
+      {
+        "path": "/gura105/operational-ontology/tree/main/examples",
+        "title": "/tree/main/examples",
+        "count": 11,
+        "uniques": 7
+      },
+      {
+        "path": "/gura105/operational-ontology/blob/main/examples/orders/ontology.ts",
+        "title": "/blob/main/examples/orders/ontology.ts",
+        "count": 5,
+        "uniques": 3
+      },
+      {
+        "path": "/gura105/operational-ontology/tree/main/examples/orders",
+        "title": "/tree/main/examples/orders",
+        "count": 5,
+        "uniques": 1
+      },
+      {
+        "path": "/gura105/operational-ontology/blob/main/docs/IMPLEMENTATION.ja.md",
+        "title": "/blob/main/docs/IMPLEMENTATION.ja.md",
+        "count": 4,
+        "uniques": 3
+      },
+      {
+        "path": "/gura105/operational-ontology/issues",
+        "title": "/issues",
+        "count": 4,
+        "uniques": 3
+      }
+    ]
   }
 ]

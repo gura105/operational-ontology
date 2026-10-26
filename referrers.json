@@ -383,5 +383,60 @@
         "uniques": 1
       }
     ]
+  },
+  {
+    "date": "2026-10-26",
+    "referrers": [
+      {
+        "referrer": "github.com",
+        "count": 38,
+        "uniques": 31
+      },
+      {
+        "referrer": "Google",
+        "count": 19,
+        "uniques": 14
+      },
+      {
+        "referrer": "linkedin.com",
+        "count": 10,
+        "uniques": 7
+      },
+      {
+        "referrer": "Bing",
+        "count": 5,
+        "uniques": 4
+      },
+      {
+        "referrer": "DuckDuckGo",
+        "count": 2,
+        "uniques": 2
+      },
+      {
+        "referrer": "dataengineeringweekly.com",
+        "count": 2,
+        "uniques": 2
+      },
+      {
+        "referrer": "t.co",
+        "count": 2,
+        "uniques": 2
+      },
+      {
+        "referrer": "teams.public.onecdn.static.microsoft",
+        "count": 2,
+        "uniques": 2
+      },
+      {
+        "referrer": "youtube.com",
+        "count": 2,
+        "uniques": 2
+      },
+      {
+        "referrer": "qiita.com",
+        "count": 1,
+        "uniques": 1
+      }
+    ]
   }
 ]
