@@ -438,5 +438,60 @@
         "uniques": 1
       }
     ]
+  },
+  {
+    "date": "2026-11-02",
+    "referrers": [
+      {
+        "referrer": "github.com",
+        "count": 53,
+        "uniques": 43
+      },
+      {
+        "referrer": "Google",
+        "count": 37,
+        "uniques": 28
+      },
+      {
+        "referrer": "linkedin.com",
+        "count": 10,
+        "uniques": 7
+      },
+      {
+        "referrer": "qiita.com",
+        "count": 9,
+        "uniques": 8
+      },
+      {
+        "referrer": "notebooks.githubusercontent.com",
+        "count": 9,
+        "uniques": 1
+      },
+      {
+        "referrer": "t.co",
+        "count": 8,
+        "uniques": 3
+      },
+      {
+        "referrer": "sd10.aslead.cloud",
+        "count": 4,
+        "uniques": 2
+      },
+      {
+        "referrer": "stackmap.shipwithai.xyz",
+        "count": 4,
+        "uniques": 1
+      },
+      {
+        "referrer": "note.com",
+        "count": 3,
+        "uniques": 3
+      },
+      {
+        "referrer": "teams.public.onecdn.static.microsoft",
+        "count": 3,
+        "uniques": 3
+      }
+    ]
   }
 ]

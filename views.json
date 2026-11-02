@@ -283,5 +283,40 @@
     "date": "2026-10-25",
     "count": 55,
     "uniques": 20
+  },
+  {
+    "date": "2026-10-26",
+    "count": 72,
+    "uniques": 27
+  },
+  {
+    "date": "2026-10-27",
+    "count": 70,
+    "uniques": 39
+  },
+  {
+    "date": "2026-10-28",
+    "count": 48,
+    "uniques": 26
+  },
+  {
+    "date": "2026-10-29",
+    "count": 108,
+    "uniques": 40
+  },
+  {
+    "date": "2026-10-30",
+    "count": 64,
+    "uniques": 28
+  },
+  {
+    "date": "2026-10-31",
+    "count": 40,
+    "uniques": 20
+  },
+  {
+    "date": "2026-11-01",
+    "count": 15,
+    "uniques": 11
   }
 ]
