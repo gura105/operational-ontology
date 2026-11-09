@@ -493,5 +493,60 @@
         "uniques": 3
       }
     ]
+  },
+  {
+    "date": "2026-11-09",
+    "referrers": [
+      {
+        "referrer": "github.com",
+        "count": 63,
+        "uniques": 48
+      },
+      {
+        "referrer": "Google",
+        "count": 36,
+        "uniques": 31
+      },
+      {
+        "referrer": "notebooks.githubusercontent.com",
+        "count": 14,
+        "uniques": 1
+      },
+      {
+        "referrer": "t.co",
+        "count": 13,
+        "uniques": 5
+      },
+      {
+        "referrer": "qiita.com",
+        "count": 12,
+        "uniques": 9
+      },
+      {
+        "referrer": "linkedin.com",
+        "count": 8,
+        "uniques": 3
+      },
+      {
+        "referrer": "dataengineeringweekly.com",
+        "count": 5,
+        "uniques": 4
+      },
+      {
+        "referrer": "Bing",
+        "count": 4,
+        "uniques": 4
+      },
+      {
+        "referrer": "sd10.aslead.cloud",
+        "count": 4,
+        "uniques": 2
+      },
+      {
+        "referrer": "stackmap.shipwithai.xyz",
+        "count": 4,
+        "uniques": 1
+      }
+    ]
   }
 ]
