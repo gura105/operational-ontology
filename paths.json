@@ -648,5 +648,70 @@
         "uniques": 4
       }
     ]
+  },
+  {
+    "date": "2026-11-16",
+    "paths": [
+      {
+        "path": "/gura105/operational-ontology",
+        "title": "Overview",
+        "count": 312,
+        "uniques": 218
+      },
+      {
+        "path": "/gura105/operational-ontology/blob/main/docs/README.zh-CN.md",
+        "title": "/blob/main/docs/README.zh-CN.md",
+        "count": 51,
+        "uniques": 34
+      },
+      {
+        "path": "/gura105/operational-ontology/tree/main",
+        "title": "/tree/main",
+        "count": 38,
+        "uniques": 13
+      },
+      {
+        "path": "/gura105/operational-ontology/blob/main/docs/README.ja.md",
+        "title": "/blob/main/docs/README.ja.md",
+        "count": 13,
+        "uniques": 7
+      },
+      {
+        "path": "/gura105/operational-ontology/tree/main/examples",
+        "title": "/tree/main/examples",
+        "count": 7,
+        "uniques": 7
+      },
+      {
+        "path": "/gura105/operational-ontology/tree/main/src",
+        "title": "/tree/main/src",
+        "count": 6,
+        "uniques": 5
+      },
+      {
+        "path": "/gura105/operational-ontology/blob/main/src/core.ts",
+        "title": "/blob/main/src/core.ts",
+        "count": 5,
+        "uniques": 5
+      },
+      {
+        "path": "/gura105/operational-ontology/tree/main/docs",
+        "title": "/tree/main/docs",
+        "count": 5,
+        "uniques": 5
+      },
+      {
+        "path": "/gura105/operational-ontology/tree/main/examples/factory",
+        "title": "/tree/main/examples/factory",
+        "count": 5,
+        "uniques": 5
+      },
+      {
+        "path": "/gura105/operational-ontology/blob/main/examples/orders/ontology.ts",
+        "title": "/blob/main/examples/orders/ontology.ts",
+        "count": 4,
+        "uniques": 4
+      }
+    ]
   }
 ]

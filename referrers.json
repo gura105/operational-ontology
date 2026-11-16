@@ -548,5 +548,60 @@
         "uniques": 1
       }
     ]
+  },
+  {
+    "date": "2026-11-16",
+    "referrers": [
+      {
+        "referrer": "github.com",
+        "count": 53,
+        "uniques": 41
+      },
+      {
+        "referrer": "Google",
+        "count": 32,
+        "uniques": 23
+      },
+      {
+        "referrer": "t.co",
+        "count": 14,
+        "uniques": 5
+      },
+      {
+        "referrer": "linkedin.com",
+        "count": 11,
+        "uniques": 4
+      },
+      {
+        "referrer": "dataengineeringweekly.com",
+        "count": 7,
+        "uniques": 6
+      },
+      {
+        "referrer": "notebooks.githubusercontent.com",
+        "count": 7,
+        "uniques": 1
+      },
+      {
+        "referrer": "Bing",
+        "count": 6,
+        "uniques": 5
+      },
+      {
+        "referrer": "qiita.com",
+        "count": 5,
+        "uniques": 3
+      },
+      {
+        "referrer": "chatgpt.com",
+        "count": 3,
+        "uniques": 1
+      },
+      {
+        "referrer": "aocr.org",
+        "count": 1,
+        "uniques": 1
+      }
+    ]
   }
 ]

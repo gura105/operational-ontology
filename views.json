@@ -353,5 +353,35 @@
     "date": "2026-11-08",
     "count": 26,
     "uniques": 19
+  },
+  {
+    "date": "2026-11-09",
+    "count": 35,
+    "uniques": 27
+  },
+  {
+    "date": "2026-11-10",
+    "count": 41,
+    "uniques": 27
+  },
+  {
+    "date": "2026-11-11",
+    "count": 52,
+    "uniques": 27
+  },
+  {
+    "date": "2026-11-12",
+    "count": 64,
+    "uniques": 30
+  },
+  {
+    "date": "2026-11-13",
+    "count": 45,
+    "uniques": 21
+  },
+  {
+    "date": "2026-11-14",
+    "count": 14,
+    "uniques": 9
   }
 ]
