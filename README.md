@@ -1,4 +1,4 @@
-**English** | [日本語](./docs/README.ja.md) | [简体中文](./docs/README.zh-CN.md)
+**English** | [日本語](./docs/README.ja.md) | [简体中文](./docs/README.zh-CN.md) | [한국어](./docs/README.ko.md)
 
 # Operational Ontology
 
