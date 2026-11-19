@@ -14,7 +14,7 @@ import { createRuntime, defineAction, defineLink, defineObject, defineOntology, 
 
 const root = join(dirname(fileURLToPath(import.meta.url)), '..')
 
-for (const file of ['README.md', 'docs/README.ja.md', 'docs/README.zh-CN.md']) {
+for (const file of ['README.md', 'docs/README.ja.md', 'docs/README.zh-CN.md', 'docs/README.ko.md']) {
   test(`the showcase snippet in ${file} constructs and enforces its rule`, () => {
     const markdown = readFileSync(join(root, file), 'utf8')
     const match = markdown.match(/```ts\n([\s\S]*?)```/)
